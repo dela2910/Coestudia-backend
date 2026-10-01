@@ -139,6 +139,8 @@ Se dispara con tags que cumplan `v*` (por ejemplo `v0.1.0`):
   CLAUDE) → PR a **`main`** → tag `vX.Y.Z`. PRs sin aprobaciones obligatorias, pero con CI en verde.
 - Este archivo está versionado **solo en `dev`** y ramas de trabajo (se agregó con `git add -f`
   porque `*.md` está en `.gitignore`). El job `Lint` falla en PRs a `main` si existe un `CLAUDE*.md`.
+  El CI corre en push **solo a `main`** (no a `dev`): si corriera en `dev`, un run en verde sobre el
+  mismo commit podría tapar el fallo de la guardia.
 - **Nunca mergear `main` hacia `dev`**: borraría este archivo de `dev`. Los hotfix se hacen en `dev`.
 - Mantener el código simple y legible; el equipo tiene experiencia limitada.
 - Fijar las versiones principales en `requirements.txt` (por ejemplo `fastapi>=0.110`), sin sobre-especificar.
