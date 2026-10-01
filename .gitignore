@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Documentación personal (no se sube al repo)
+*.md
+!README.md
