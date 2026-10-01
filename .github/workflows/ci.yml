@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   lint:
@@ -12,6 +12,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verificar que no haya docs personales (solo PRs a main)
+        if: github.base_ref == 'main'
+        run: |
+          if git ls-files | grep -E '(^|/)CLAUDE[^/]*\.md$'; then
+            echo "::error::Estos archivos no pueden llegar a main. Crea una rama release/* desde dev y bórralos con git rm."
+            exit 1
+          fi
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
