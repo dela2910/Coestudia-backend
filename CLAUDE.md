@@ -135,10 +135,11 @@ Se dispara con tags que cumplan `v*` (por ejemplo `v0.1.0`):
 
 - Código y nombres de variables en inglés; mensajes de commit, README y comentarios en español.
 - Commits con prefijo convencional: `feat:`, `fix:`, `chore:`, `docs:`, `ci:`, `test:`.
-- Todo cambio entra por **pull request** a `main`. No se exigen aprobaciones (0 required approvals):
-  cada integrante puede mergear su propio PR, pero el CI debe estar en verde.
-  Para el commit inicial del esqueleto se puede ir directo a `main`; luego trabajar en ramas
-  `feat/...`, `chore/...`.
+- Flujo de ramas: `feat/...` → PR a **`dev`** → rama `release/vX.Y.Z` desde `dev` (con `git rm` del
+  CLAUDE) → PR a **`main`** → tag `vX.Y.Z`. PRs sin aprobaciones obligatorias, pero con CI en verde.
+- Este archivo está versionado **solo en `dev`** y ramas de trabajo (se agregó con `git add -f`
+  porque `*.md` está en `.gitignore`). El job `Lint` falla en PRs a `main` si existe un `CLAUDE*.md`.
+- **Nunca mergear `main` hacia `dev`**: borraría este archivo de `dev`. Los hotfix se hacen en `dev`.
 - Mantener el código simple y legible; el equipo tiene experiencia limitada.
 - Fijar las versiones principales en `requirements.txt` (por ejemplo `fastapi>=0.110`), sin sobre-especificar.
 
