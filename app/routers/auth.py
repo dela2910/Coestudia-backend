@@ -1,6 +1,7 @@
 """Registro, verificación del correo e inicio de sesión (CU01–02, RF01–02, RF17)."""
 
 import logging
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -13,6 +14,8 @@ from app.models import TokenCorreo, Usuario
 from app.schemas import EmailIn, LoginIn, MensajeOut, RegistroIn, SesionOut, TokenIn, UsuarioOut
 from app.security import (
     DUMMY_PASSWORD_HASH,
+    EMAIL_MAX_PER_DAY,
+    EMAIL_RESEND_COOLDOWN,
     EMAIL_TOKEN_TTL,
     as_utc,
     create_access_token,
@@ -57,6 +60,15 @@ def has_pending_verification(user: Usuario) -> bool:
         t.tipo == "verificacion" and t.usado_en is None and as_utc(t.expira_en) > now
         for t in user.tokens
     )
+
+
+def can_resend(user: Usuario) -> bool:
+    """Como máximo un correo por minuto y EMAIL_MAX_PER_DAY al día por cuenta."""
+    now = now_utc()
+    sent = [as_utc(t.creado_en) for t in user.tokens if t.tipo == "verificacion"]
+    if any(now - created < EMAIL_RESEND_COOLDOWN for created in sent):
+        return False
+    return sum(now - created < timedelta(days=1) for created in sent) < EMAIL_MAX_PER_DAY
 
 
 def send_verification(user: Usuario, token: str) -> None:
@@ -150,11 +162,12 @@ def verify_email(data: TokenIn, db: Session = Depends(get_db)):
 )
 def resend_verification(data: EmailIn, db: Session = Depends(get_db)):
     user = find_active_user(db, data.email)
-    if user is not None and user.email_verificado_en is None:
+    if user is not None and user.email_verificado_en is None and can_resend(user):
         token = issue_verification_token(db, user)
         db.commit()
         send_verification(user, token)
-    # La respuesta es la misma exista o no la cuenta, para no revelar qué correos están registrados
+    # La respuesta es la misma exista o no la cuenta (y aunque se haya alcanzado el límite), para
+    # no revelar qué correos están registrados
     return MensajeOut(
         message="Si la cuenta existe y no está verificada, te enviamos un correo nuevo."
     )

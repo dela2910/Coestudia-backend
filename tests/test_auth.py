@@ -159,8 +159,17 @@ def test_verify_rejects_unknown_token(client):
     assert client.post("/api/auth/verificar", json={"token": "inventado"}).status_code == 400
 
 
-def test_resend_invalidates_previous_link(client, outbox):
+def make_tokens_older(session_factory, minutes):
+    # Simula que los correos anteriores se enviaron hace un rato
+    with session_factory() as db:
+        for token in db.query(TokenCorreo):
+            token.creado_en = now_utc() - timedelta(minutes=minutes)
+        db.commit()
+
+
+def test_resend_invalidates_previous_link(client, outbox, session_factory):
     register(client)
+    make_tokens_older(session_factory, minutes=2)
     response = client.post("/api/auth/reenviar-verificacion", json={"email": NEW_USER["email"]})
 
     assert response.status_code == 202
@@ -168,6 +177,22 @@ def test_resend_invalidates_previous_link(client, outbox):
     first, second = outbox[0][2], outbox[1][2]
     assert client.post("/api/auth/verificar", json={"token": first}).status_code == 400
     assert client.post("/api/auth/verificar", json={"token": second}).status_code == 200
+
+
+def test_resend_waits_one_minute(client, outbox):
+    register(client)
+    response = client.post("/api/auth/reenviar-verificacion", json={"email": NEW_USER["email"]})
+    # Misma respuesta, pero no se manda otro correo
+    assert response.status_code == 202
+    assert len(outbox) == 1
+
+
+def test_resend_has_daily_limit(client, outbox, session_factory):
+    register(client)
+    for _ in range(10):
+        make_tokens_older(session_factory, minutes=2)
+        client.post("/api/auth/reenviar-verificacion", json={"email": NEW_USER["email"]})
+    assert len(outbox) == 5
 
 
 def test_resend_does_not_reveal_unknown_emails(client, outbox):

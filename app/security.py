@@ -25,6 +25,9 @@ JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL = timedelta(days=7)
 # Duración de los enlaces que se mandan por correo
 EMAIL_TOKEN_TTL = timedelta(hours=24)
+# Límites de reenvío: protegen la bandeja del usuario y la cuota diaria de Brevo (300 correos)
+EMAIL_RESEND_COOLDOWN = timedelta(minutes=1)
+EMAIL_MAX_PER_DAY = 5
 
 
 def now_utc() -> datetime:
