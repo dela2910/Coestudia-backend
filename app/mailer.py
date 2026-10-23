@@ -33,7 +33,7 @@ def send_email(to: str, subject: str, html: str, text: str) -> None:
         json={
             "sender": {
                 "name": "Coestudia",
-                "email": os.getenv("MAIL_FROM", "no-reply@coestudia.cl"),
+                "email": os.getenv("MAIL_FROM") or "no-reply@coestudia.cl",
             },
             "to": [{"email": to}],
             "subject": subject,

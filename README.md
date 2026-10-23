@@ -14,6 +14,10 @@ alembic upgrade head             # crea las tablas (por defecto en SQLite, ./coe
 uvicorn app.main:app --reload
 ```
 
+Para usar variables locales (por ejemplo la API key de Brevo), crea un `.env` con solo las que
+necesites (ver `.env.example`) y arranca con `uvicorn app.main:app --reload --env-file .env`.
+No copies `DATABASE_URL` de ejemplo: si no la defines se usa SQLite.
+
 Para trabajar contra PostgreSQL en vez de SQLite, exporta `DATABASE_URL` antes de correr
 `alembic` y `uvicorn` (ver `.env.example`).
 
