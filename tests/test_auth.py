@@ -8,7 +8,7 @@ from app.security import JWT_ALGORITHM, jwt_secret, now_utc
 
 NEW_USER = {
     "email": "Camila.Perez@UC.cl",
-    "password": "clave-segura-1",
+    "password": "Clave-segura-1",
     "nombre": "Camila Pérez",
     "carrera": "Ingeniería Civil",
     "anio_ingreso": 2024,
@@ -77,8 +77,11 @@ def test_register_rejects_duplicate_email(client):
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"password": "corta"},
-        {"password": "x" * 73},
+        {"password": "Corta1"},
+        {"password": "Xx1" * 25},
+        {"password": "sin-mayuscula-1"},
+        {"password": "SIN-MINUSCULA-1"},
+        {"password": "Sin-numero"},
         {"nombre": "   "},
         {"anio_ingreso": 1980},
         {"anio_ingreso": 3000},

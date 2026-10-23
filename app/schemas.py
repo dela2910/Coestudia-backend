@@ -20,9 +20,16 @@ class RegistroIn(BaseModel):
 
     @field_validator("password")
     @classmethod
-    def password_fits_bcrypt(cls, value: str) -> str:
+    def password_is_strong(cls, value: str) -> str:
+        # Mismas reglas que muestra el formulario de registro (Login.jsx)
         if len(value.encode()) > PASSWORD_MAX_BYTES:
             raise ValueError("La contraseña puede tener como máximo 72 caracteres.")
+        if not any(c.isupper() for c in value):
+            raise ValueError("La contraseña debe tener al menos una mayúscula.")
+        if not any(c.islower() for c in value):
+            raise ValueError("La contraseña debe tener al menos una minúscula.")
+        if not any(c.isdigit() for c in value):
+            raise ValueError("La contraseña debe tener al menos un número.")
         return value
 
     @field_validator("anio_ingreso")
