@@ -3,7 +3,7 @@
 import logging
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.mailer import send_verification_email
 from app.models import TokenCorreo, Usuario
+from app.rate_limit import login_limiter
 from app.schemas import EmailIn, LoginIn, MensajeOut, RegistroIn, SesionOut, TokenIn, UsuarioOut
 from app.security import (
     DUMMY_PASSWORD_HASH,
@@ -174,13 +175,29 @@ def resend_verification(data: EmailIn, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=SesionOut)
-def login(data: LoginIn, db: Session = Depends(get_db)):
+def login(data: LoginIn, request: Request, db: Session = Depends(get_db)):
+    # Intentos fallidos por correo y conexión: después de 5 en 15 minutos se bloquea un rato,
+    # aunque la contraseña sea correcta (si no, un ataque podría seguir probando)
+    client_ip = request.client.host if request.client else ""
+    attempt_key = (data.email.lower(), client_ip)
+    wait = login_limiter.retry_after(attempt_key)
+    if wait:
+        minutes = max(1, round(wait / 60))
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"Demasiados intentos fallidos. Intenta de nuevo en {minutes} "
+            f"{'minuto' if minutes == 1 else 'minutos'}.",
+            headers={"Retry-After": str(wait)},
+        )
+
     user = find_active_user(db, data.email)
     password_ok = verify_password(
         data.password, user.password_hash if user else DUMMY_PASSWORD_HASH
     )
     if user is None or not password_ok:
+        login_limiter.record_failure(attempt_key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Correo o contraseña incorrectos.")
+    login_limiter.reset(attempt_key)
     if user.email_verificado_en is None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "Debes verificar tu correo antes de iniciar sesión."

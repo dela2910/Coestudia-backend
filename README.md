@@ -43,6 +43,7 @@ app/
 ├── models.py        # modelo de datos (tablas SQLAlchemy)
 ├── schemas.py       # entrada y salida de la API (Pydantic)
 ├── security.py      # contraseñas, JWT, tokens de correo y current_user
+├── rate_limit.py    # límite de intentos fallidos de login
 ├── mailer.py        # envío de correos (Brevo)
 ├── universities.py  # universidad según el dominio del correo
 └── routers/
@@ -80,6 +81,10 @@ tests/
 | `POST /api/auth/reenviar-verificacion`| Envía un enlace nuevo; los anteriores dejan de servir (202) |
 | `POST /api/auth/login`                | Devuelve el JWT (401 si falla, 403 si falta verificar)     |
 | `GET /api/auth/me`                    | Usuario de la sesión actual                                |
+
+Después de 5 intentos fallidos de login con el mismo correo y conexión en 15 minutos, `/login`
+responde 429 hasta que pasen los 15 minutos (`app/rate_limit.py`, en memoria). El reenvío del
+correo de verificación está limitado a 1 por minuto y 5 al día por cuenta.
 
 El enlace del correo apunta a `FRONTEND_URL/?verificar=<token>`. En local, sin `BREVO_API_KEY`,
 el enlace aparece en la consola del backend: cópialo en el navegador.

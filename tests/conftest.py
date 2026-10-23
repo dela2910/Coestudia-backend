@@ -4,6 +4,15 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base, get_db, make_engine
 from app.main import app
+from app.rate_limit import login_limiter
+
+
+@pytest.fixture(autouse=True)
+def reset_login_limiter():
+    # El límite de intentos vive en memoria: se limpia para que no pase de un test a otro
+    login_limiter.reset()
+    yield
+    login_limiter.reset()
 
 
 @pytest.fixture
