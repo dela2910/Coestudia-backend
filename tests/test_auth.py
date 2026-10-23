@@ -68,10 +68,40 @@ def test_register_requires_terms(client):
     assert "términos" in response.json()["detail"]
 
 
-def test_register_rejects_duplicate_email(client):
-    register(client)
+def test_register_rejects_duplicate_email(client, outbox):
+    register_and_verify(client, outbox)
     response = register(client, email="camila.perez@uc.cl")
     assert response.status_code == 409
+    assert response.json()["detail"] == "Ya existe una cuenta con ese correo."
+
+
+def test_register_keeps_pending_registration(client, outbox):
+    # Mientras el enlace siga vigente, nadie puede reemplazar los datos de la cuenta
+    register(client)
+    response = register(client, nombre="Otra Persona", password="Otra-clave-9")
+    assert response.status_code == 409
+    assert "registro pendiente" in response.json()["detail"]
+    assert len(outbox) == 1
+
+
+def test_register_replaces_unverified_account_after_link_expires(client, outbox, session_factory):
+    register(client)
+    with session_factory() as db:
+        db.query(TokenCorreo).one().expira_en = now_utc() - timedelta(minutes=1)
+        db.commit()
+
+    response = register(client, nombre="Camila Rojas", password="Nueva-clave-9")
+    assert response.status_code == 201
+    assert response.json()["nombre"] == "Camila Rojas"
+    with session_factory() as db:
+        assert db.query(Usuario).count() == 1
+
+    session = client.post("/api/auth/verificar", json={"token": outbox[-1][2]}).json()
+    login = client.post(
+        "/api/auth/login", json={"email": NEW_USER["email"], "password": "Nueva-clave-9"}
+    )
+    assert session["usuario"]["nombre"] == "Camila Rojas"
+    assert login.status_code == 200
 
 
 @pytest.mark.parametrize(

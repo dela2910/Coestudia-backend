@@ -50,6 +50,15 @@ def issue_verification_token(db: Session, user: Usuario) -> str:
     return token
 
 
+def has_pending_verification(user: Usuario) -> bool:
+    """True si el usuario tiene un enlace de verificación sin usar y todavía vigente."""
+    now = now_utc()
+    return any(
+        t.tipo == "verificacion" and t.usado_en is None and as_utc(t.expira_en) > now
+        for t in user.tokens
+    )
+
+
 def send_verification(user: Usuario, token: str) -> None:
     # Si el correo falla la cuenta igual queda creada: el usuario puede pedir que se reenvíe
     try:
@@ -78,16 +87,30 @@ def register(data: RegistroIn, db: Session = Depends(get_db)):
             status.HTTP_400_BAD_REQUEST, "Debes aceptar los términos y condiciones."
         )
 
-    user = Usuario(
-        email=email,
-        password_hash=hash_password(data.password),
-        nombre=data.nombre,
-        universidad=university,
-        carrera=data.carrera,
-        anio_ingreso=data.anio_ingreso,
-        terminos_aceptados_en=now_utc(),
-    )
-    db.add(user)
+    user = db.scalar(select(Usuario).where(Usuario.email == email))
+    if user is not None:
+        if user.email_verificado_en is not None or user.eliminado_en is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Ya existe una cuenta con ese correo.")
+        # Cuenta sin verificar (ej. alguien se equivocó de correo). Mientras su enlace siga
+        # vigente no se toca: si se reemplazara, otra persona podría poner su contraseña en una
+        # cuenta que después activa el dueño del correo.
+        if has_pending_verification(user):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Ya hay un registro pendiente con ese correo. Revisa tu bandeja o pide que te "
+                "reenviemos el enlace.",
+            )
+    else:
+        user = Usuario(email=email)
+        db.add(user)
+
+    # Cuenta nueva, o una sin verificar cuyo enlace ya venció: se guardan los datos nuevos
+    user.password_hash = hash_password(data.password)
+    user.nombre = data.nombre
+    user.universidad = university
+    user.carrera = data.carrera
+    user.anio_ingreso = data.anio_ingreso
+    user.terminos_aceptados_en = now_utc()
     token = issue_verification_token(db, user)
     try:
         db.commit()
