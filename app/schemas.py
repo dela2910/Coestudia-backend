@@ -82,3 +82,33 @@ class SesionOut(BaseModel):
 
 class MensajeOut(BaseModel):
     message: str
+
+
+class AsignaturaOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    sigla: str
+    nombre: str
+
+
+class HorarioOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    dia_semana: int
+    es_manana: bool
+
+
+class GrupoResumenOut(BaseModel):
+    """Grupo en los resultados del buscador. No incluye lugar ni enlace: solo los ven los
+    integrantes (RNF de privacidad)."""
+
+    id: int
+    asignatura: AsignaturaOut
+    descripcion: str | None
+    es_online: bool
+    cupo_maximo: int
+    miembros: int
+    abierto: bool
+    vigente_hasta: date
+    horarios: list[HorarioOut]

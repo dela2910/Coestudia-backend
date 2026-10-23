@@ -10,6 +10,7 @@ con el modelo entregado.
 """
 
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
     Boolean,
@@ -34,6 +35,11 @@ TIMESTAMPTZ = TIMESTAMP(timezone=True)
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def today_in_chile() -> date:
+    # vigente_hasta es una fecha sin hora: se compara con el día actual en Chile, no en UTC
+    return datetime.now(ZoneInfo("America/Santiago")).date()
 
 
 # Fecha de creación que se llena sola al insertar

@@ -14,6 +14,12 @@ alembic upgrade head             # crea las tablas (por defecto en SQLite, ./coe
 uvicorn app.main:app --reload
 ```
 
+Para tener usuarios y grupos con los que probar, carga los datos de ejemplo (solo SQLite):
+
+```bash
+python -m app.seed               # entra con ana.rojas@uc.cl / Coestudia2026
+```
+
 Para usar variables locales (por ejemplo la API key de Brevo), crea un `.env` con solo las que
 necesites (ver `.env.example`) y arranca con `uvicorn app.main:app --reload --env-file .env`.
 No copies `DATABASE_URL` de ejemplo: si no la defines se usa SQLite.
@@ -46,14 +52,20 @@ app/
 ├── rate_limit.py    # límite de intentos fallidos de login
 ├── mailer.py        # envío de correos (Brevo)
 ├── universities.py  # universidad según el dominio del correo
+├── text.py          # normalizar siglas y nombres (sin tildes ni espacios)
+├── seed.py          # datos de ejemplo: python -m app.seed
 └── routers/
     ├── hello.py     # /health y /api/hello
-    └── auth.py      # /api/auth: registro, verificación, login y /me
+    ├── auth.py      # /api/auth: registro, verificación, login y /me
+    └── grupos.py    # /api/grupos: buscar y filtrar
 migrations/          # migraciones de Alembic
 tests/
 ├── conftest.py      # cliente de pruebas con base SQLite y bandeja de correos
 ├── test_auth.py
+├── test_grupos.py
 ├── test_hello.py
+├── test_rate_limit.py
+├── test_seed.py
 └── test_models.py   # reglas del esquema y que las migraciones calcen con models.py
 .github/workflows/
 ├── ci.yml           # lint → test
@@ -105,6 +117,22 @@ def my_groups(user: Usuario = Depends(current_user)):
 
 En los tests, el fixture `client` de `tests/conftest.py` usa una base nueva y `outbox` guarda los
 correos en vez de enviarlos (ver `tests/test_auth.py`).
+
+## Grupos
+
+`GET /api/grupos` (requiere sesión) busca grupos de la universidad del usuario:
+
+| Parámetro   | Ejemplo               | Qué filtra                                                 |
+| ----------- | --------------------- | ---------------------------------------------------------- |
+| `q`         | `calculo`, `mat 1620` | Sigla o nombre de la asignatura, sin importar tildes       |
+| `es_online` | `true` / `false`      | Modalidad; sin el parámetro, cualquiera                    |
+| `dia`       | `dia=0&dia=2`         | Días (0 = lunes … 5 = sábado)                              |
+| `es_manana` | `true` / `false`      | Bloque; con `dia`, ambos deben calzar en un mismo horario  |
+
+Devuelve solo grupos no eliminados y vigentes (`vigente_hasta` desde hoy, hora de Chile), con los
+abiertos primero. No incluye `lugar` ni `enlace`: solo los ven los integrantes.
+
+`app/text.py` tiene `normalize_code()` para guardar las siglas igual que se buscan (B05).
 
 ## Base de datos y migraciones
 
