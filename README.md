@@ -36,6 +36,7 @@ Para trabajar contra PostgreSQL en vez de SQLite, exporta `DATABASE_URL` antes d
 ```bash
 ruff check .
 pytest
+pytest --cov=app                 # con el porcentaje de cobertura por archivo
 ```
 
 Ambos se ejecutan automáticamente en GitHub Actions en cada pull request y en cada push a `main`.
