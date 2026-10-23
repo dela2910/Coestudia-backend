@@ -54,7 +54,11 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return bcrypt.checkpw(password.encode(), password_hash.encode())
+    encoded = password.encode()
+    # Ninguna contraseña guardada pasa de 72 bytes; bcrypt lanza error si se le pasa una más larga
+    if len(encoded) > 72:
+        return False
+    return bcrypt.checkpw(encoded, password_hash.encode())
 
 
 # Se compara contra este hash cuando el correo no existe, para que la respuesta tarde lo mismo y

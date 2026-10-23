@@ -44,9 +44,18 @@ class LoginIn(BaseModel):
     email: EmailStr
     password: str
 
+    @field_validator("password")
+    @classmethod
+    def password_not_too_long(cls, value: str) -> str:
+        # Evita mandarle a bcrypt contraseñas gigantes (bcrypt falla sobre 72 bytes)
+        if len(value.encode()) > PASSWORD_MAX_BYTES:
+            raise ValueError("La contraseña puede tener como máximo 72 caracteres.")
+        return value
+
 
 class TokenIn(BaseModel):
-    token: str
+    # Los tokens del correo miden 43 caracteres; el límite evita cuerpos enormes
+    token: str = Field(max_length=200)
 
 
 class EmailIn(BaseModel):

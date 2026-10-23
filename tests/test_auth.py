@@ -188,6 +188,17 @@ def test_login_rejects_bad_credentials(client, outbox, credentials):
     assert response.json()["detail"] == "Correo o contraseña incorrectos."
 
 
+def test_login_rejects_too_long_password(client):
+    response = client.post(
+        "/api/auth/login", json={"email": NEW_USER["email"], "password": "x" * 100}
+    )
+    assert response.status_code == 422
+
+
+def test_verify_rejects_too_long_token(client):
+    assert client.post("/api/auth/verificar", json={"token": "x" * 201}).status_code == 422
+
+
 def test_login_rejects_deleted_account(client, outbox, session_factory):
     register_and_verify(client, outbox)
     with session_factory() as db:
