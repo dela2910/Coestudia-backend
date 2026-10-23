@@ -37,10 +37,17 @@ app/
 ├── main.py          # instancia FastAPI, CORS y registro de routers
 ├── db.py            # conexión a la base, sesión y dependencia get_db
 ├── models.py        # modelo de datos (tablas SQLAlchemy)
+├── schemas.py       # entrada y salida de la API (Pydantic)
+├── security.py      # contraseñas, JWT, tokens de correo y current_user
+├── mailer.py        # envío de correos (Brevo)
+├── universities.py  # universidad según el dominio del correo
 └── routers/
-    └── hello.py     # /health y /api/hello
+    ├── hello.py     # /health y /api/hello
+    └── auth.py      # /api/auth: registro, verificación, login y /me
 migrations/          # migraciones de Alembic
 tests/
+├── conftest.py      # cliente de pruebas con base SQLite y bandeja de correos
+├── test_auth.py
 ├── test_hello.py
 └── test_models.py   # reglas del esquema y que las migraciones calcen con models.py
 .github/workflows/
@@ -54,8 +61,41 @@ tests/
 | -------------- | -------------------------------------------------------------------- |
 | `FRONTEND_URL` | URL del frontend en producción; se agrega a los orígenes CORS.       |
 | `DATABASE_URL` | Connection string de PostgreSQL (Neon). Sin ella se usa SQLite local. |
+| `JWT_SECRET`    | Clave para firmar las sesiones. Obligatoria en producción (Render).   |
+| `BREVO_API_KEY` | API key de Brevo. Sin ella los correos se muestran en la consola.    |
+| `MAIL_FROM`     | Remitente de los correos (debe estar validado en Brevo).             |
 
 `http://localhost:5173` (Vite) siempre está permitido.
+
+## Autenticación
+
+| Método y ruta                         | Qué hace                                                   |
+| ------------------------------------- | ---------------------------------------------------------- |
+| `POST /api/auth/registro`             | Crea la cuenta y envía el enlace de verificación (201)      |
+| `POST /api/auth/verificar`            | Verifica el correo con el token del enlace e inicia sesión |
+| `POST /api/auth/reenviar-verificacion`| Envía un enlace nuevo; los anteriores dejan de servir (202) |
+| `POST /api/auth/login`                | Devuelve el JWT (401 si falla, 403 si falta verificar)     |
+| `GET /api/auth/me`                    | Usuario de la sesión actual                                |
+
+El enlace del correo apunta a `FRONTEND_URL/?verificar=<token>`. En local, sin `BREVO_API_KEY`,
+el enlace aparece en la consola del backend: cópialo en el navegador.
+
+Para proteger un endpoint, pide el usuario actual. Si no hay una sesión válida, responde 401:
+
+```python
+from fastapi import Depends
+
+from app.models import Usuario
+from app.security import current_user
+
+
+@router.get("/api/grupos/mios")
+def my_groups(user: Usuario = Depends(current_user)):
+    ...
+```
+
+En los tests, el fixture `client` de `tests/conftest.py` usa una base nueva y `outbox` guarda los
+correos en vez de enviarlos (ver `tests/test_auth.py`).
 
 ## Base de datos y migraciones
 
