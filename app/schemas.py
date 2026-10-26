@@ -35,9 +35,39 @@ class RegistroIn(BaseModel):
     @field_validator("anio_ingreso")
     @classmethod
     def entry_year_not_in_future(cls, value: int) -> int:
-        if value > date.today().year:
-            raise ValueError("El año de ingreso no puede ser futuro.")
-        return value
+        return check_entry_year(value)
+
+
+def check_entry_year(value: int) -> int:
+    if value > date.today().year:
+        raise ValueError("El año de ingreso no puede ser futuro.")
+    return value
+
+
+class PerfilIn(BaseModel):
+    """Datos del perfil académico que el usuario puede editar. El correo y la universidad no
+    cambian: salen del correo institucional."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    nombre: str = Field(min_length=1, max_length=120)
+    carrera: str = Field(min_length=1, max_length=120)
+    anio_ingreso: int = Field(ge=1990)
+
+    @field_validator("anio_ingreso")
+    @classmethod
+    def entry_year_not_in_future(cls, value: int) -> int:
+        return check_entry_year(value)
+
+
+class AsignaturaIn(BaseModel):
+    """Asignatura para «mis asignaturas». Si la sigla no existe en la universidad del usuario,
+    se crea con el nombre indicado."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    sigla: str = Field(min_length=1, max_length=20)
+    nombre: str | None = Field(default=None, max_length=200)
 
 
 class LoginIn(BaseModel):
