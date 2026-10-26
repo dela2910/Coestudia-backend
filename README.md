@@ -58,6 +58,8 @@ app/
 └── routers/
     ├── hello.py     # /health y /api/hello
     ├── auth.py      # /api/auth: registro, verificación, login y /me
+    ├── perfil.py    # /api/perfil: editar el perfil y «mis asignaturas»
+    ├── asignaturas.py  # /api/asignaturas: catálogo para autocompletar siglas
     └── grupos.py    # /api/grupos: buscar y filtrar
 migrations/          # migraciones de Alembic
 tests/
@@ -134,6 +136,22 @@ Devuelve solo grupos no eliminados y vigentes (`vigente_hasta` desde hoy, hora d
 abiertos primero. No incluye `lugar` ni `enlace`: solo los ven los integrantes.
 
 `app/text.py` tiene `normalize_code()` para guardar las siglas igual que se buscan (B05).
+
+## Perfil y mis asignaturas
+
+Todas requieren sesión.
+
+| Método y ruta                         | Qué hace                                                    |
+| ------------------------------------- | ----------------------------------------------------------- |
+| `PUT /api/perfil`                     | Cambia `nombre`, `carrera` y `anio_ingreso` (no el correo)  |
+| `GET /api/perfil/asignaturas`         | Asignaturas del usuario, ordenadas por sigla                |
+| `POST /api/perfil/asignaturas`        | Agrega `{sigla, nombre?}`; si la sigla no existe, la crea (201) |
+| `DELETE /api/perfil/asignaturas/{id}` | La quita de la lista del usuario, no del catálogo (204)     |
+| `GET /api/asignaturas`                | Catálogo de asignaturas de la universidad del usuario       |
+
+`POST /api/perfil/asignaturas` busca la sigla normalizada (`mat 1620` → `MAT1620`) en la
+universidad del usuario. Si no existe y no viene `nombre`, responde 404 para que el frontend pida
+el nombre. Agregar una que ya está en la lista no es error. Máximo 10 asignaturas por usuario.
 
 ## Base de datos y migraciones
 
