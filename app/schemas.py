@@ -142,3 +142,22 @@ class GrupoResumenOut(BaseModel):
     abierto: bool
     vigente_hasta: date
     horarios: list[HorarioOut]
+
+
+class IntegranteOut(BaseModel):
+    """Integrante en el detalle del grupo. Sin correo: el contacto queda dentro del grupo."""
+
+    id: int
+    nombre: str
+    carrera: str | None
+    es_creador: bool
+
+
+class GrupoDetalleOut(GrupoResumenOut):
+    """Detalle del grupo (CU05). Lugar y enlace vienen solo si el usuario es integrante."""
+
+    creador: str
+    integrantes: list[IntegranteOut]
+    es_miembro: bool
+    lugar: str | None
+    enlace: str | None

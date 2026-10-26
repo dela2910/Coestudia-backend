@@ -1,15 +1,21 @@
-"""Grupos de estudio. Buscar y filtrar (CU04, RF06–07)."""
+"""Grupos de estudio. Buscar y filtrar (CU04, RF06–07) y ver el detalle (CU05, RF08)."""
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import Field
 from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.models import Asignatura, GrupoEstudio, HorarioGrupo, MiembroGrupo, Usuario, today_in_chile
-from app.schemas import AsignaturaOut, GrupoResumenOut, HorarioOut
+from app.schemas import (
+    AsignaturaOut,
+    GrupoDetalleOut,
+    GrupoResumenOut,
+    HorarioOut,
+    IntegranteOut,
+)
 from app.security import current_user
 from app.text import normalize_code, normalize_text
 
@@ -19,6 +25,24 @@ MAX_RESULTS = 100
 
 # HORARIO_GRUPO.dia_semana: 0 = lunes ... 5 = sábado
 DayOfWeek = Annotated[int, Field(ge=0, le=5)]
+
+
+def summary_fields(group: GrupoEstudio, members: int) -> dict:
+    """Datos que comparten el resultado del buscador y el detalle del grupo."""
+    return {
+        "id": group.id,
+        "asignatura": AsignaturaOut.model_validate(group.asignatura),
+        "descripcion": group.descripcion,
+        "es_online": group.es_online,
+        "cupo_maximo": group.cupo_maximo,
+        "miembros": members,
+        "abierto": group.abierto,
+        "vigente_hasta": group.vigente_hasta,
+        "horarios": [
+            HorarioOut.model_validate(h)
+            for h in sorted(group.horarios, key=lambda h: (h.dia_semana, not h.es_manana))
+        ],
+    }
 
 
 def matches_subject(subject: Asignatura, query: str) -> bool:
@@ -77,20 +101,48 @@ def search_groups(
             schedule.append(HorarioGrupo.es_manana.in_(es_manana))
         stmt = stmt.where(exists().where(*schedule))
 
-    return [
-        GrupoResumenOut(
-            id=group.id,
-            asignatura=AsignaturaOut.model_validate(group.asignatura),
-            descripcion=group.descripcion,
-            es_online=group.es_online,
-            cupo_maximo=group.cupo_maximo,
-            miembros=total,
-            abierto=group.abierto,
-            vigente_hasta=group.vigente_hasta,
-            horarios=[
-                HorarioOut.model_validate(h)
-                for h in sorted(group.horarios, key=lambda h: (h.dia_semana, not h.es_manana))
-            ],
+    return [GrupoResumenOut(**summary_fields(group, total)) for group, total in db.execute(stmt)]
+
+
+@router.get("/{grupo_id}", response_model=GrupoDetalleOut)
+def group_detail(
+    grupo_id: int, user: Usuario = Depends(current_user), db: Session = Depends(get_db)
+):
+    """Detalle de un grupo vigente de la universidad del usuario, con sus integrantes.
+
+    Lugar y enlace se muestran solo a los integrantes (RNF de privacidad).
+    """
+    group = db.get(GrupoEstudio, grupo_id)
+    # Los grupos de otra universidad, eliminados o vencidos no aparecen en el buscador: tampoco
+    # se pueden abrir con el id
+    if (
+        group is None
+        or group.asignatura.universidad != user.universidad
+        or group.eliminado_en is not None
+        or group.vigente_hasta < today_in_chile()
+    ):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Este grupo no existe o ya no está disponible."
         )
-        for group, total in db.execute(stmt)
-    ]
+
+    # El creador primero y después en el orden en que entraron
+    members = sorted(
+        group.miembros, key=lambda m: (m.usuario_id != group.creador_id, m.unido_en, m.usuario_id)
+    )
+    is_member = any(m.usuario_id == user.id for m in members)
+    return GrupoDetalleOut(
+        **summary_fields(group, len(members)),
+        creador=group.creador.nombre,
+        integrantes=[
+            IntegranteOut(
+                id=m.usuario.id,
+                nombre=m.usuario.nombre,
+                carrera=m.usuario.carrera,
+                es_creador=m.usuario_id == group.creador_id,
+            )
+            for m in members
+        ],
+        es_miembro=is_member,
+        lugar=group.lugar if is_member else None,
+        enlace=group.enlace if is_member else None,
+    )
