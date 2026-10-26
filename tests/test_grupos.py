@@ -168,3 +168,83 @@ def test_counts_members(client, auth, data, session_factory):
 
 def test_rejects_invalid_day(client, auth):
     assert client.get("/api/grupos", params={"dia": 6}, headers=auth).status_code == 422
+
+
+# --- Detalle del grupo (B07) ---
+
+
+def detail(client, auth, group_id):
+    return client.get(f"/api/grupos/{group_id}", headers=auth)
+
+
+def join(session_factory, group_id, email):
+    """Agrega como integrante al usuario con ese correo."""
+    with session_factory() as db:
+        user = db.query(Usuario).filter_by(email=email).one()
+        db.add(MiembroGrupo(grupo_id=group_id, usuario_id=user.id))
+        db.commit()
+
+
+def test_detail_of_group(client, auth, data):
+    response = detail(client, auth, data["calculo_presencial"])
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == data["calculo_presencial"]
+    assert body["asignatura"]["sigla"] == "MAT1620"
+    assert body["descripcion"] == "Integrales"
+    assert (body["es_online"], body["cupo_maximo"], body["miembros"]) == (False, 4, 1)
+    assert body["horarios"] == [{"dia_semana": 1, "es_manana": False}]
+    assert body["creador"] == "Ana"
+    assert body["integrantes"] == [
+        {"id": body["integrantes"][0]["id"], "nombre": "Ana", "carrera": None, "es_creador": True}
+    ]
+    assert body["es_miembro"] is False
+
+
+def test_detail_hides_place_and_link_from_non_members(client, auth, data):
+    presencial = detail(client, auth, data["calculo_presencial"]).json()
+    online = detail(client, auth, data["calculo_online"]).json()
+
+    assert (presencial["lugar"], presencial["enlace"]) == (None, None)
+    assert (online["lugar"], online["enlace"]) == (None, None)
+    # Los integrantes no traen correo
+    assert "email" not in presencial["integrantes"][0]
+
+
+def test_members_see_place_and_link(client, auth, data, session_factory):
+    join(session_factory, data["calculo_presencial"], "camila.perez@uc.cl")
+    join(session_factory, data["calculo_online"], "camila.perez@uc.cl")
+
+    presencial = detail(client, auth, data["calculo_presencial"]).json()
+    online = detail(client, auth, data["calculo_online"]).json()
+
+    assert presencial["es_miembro"] is True
+    assert presencial["lugar"] == "Biblioteca"
+    assert online["enlace"] == "https://x"
+    # El creador primero, después el resto en el orden en que entraron
+    assert [(m["nombre"], m["es_creador"]) for m in presencial["integrantes"]] == [
+        ("Ana", True),
+        ("Camila Pérez", False),
+    ]
+    assert presencial["miembros"] == 2
+
+
+def test_detail_of_closed_group(client, auth, data):
+    response = detail(client, auth, data["calculo_cerrado"])
+    assert response.status_code == 200
+    assert response.json()["abierto"] is False
+
+
+@pytest.mark.parametrize("name", ["vencido", "eliminado", "otra_universidad"])
+def test_detail_of_unavailable_group(client, auth, data, name):
+    response = detail(client, auth, data[name])
+    assert response.status_code == 404
+
+
+def test_detail_of_missing_group(client, auth, data):
+    assert detail(client, auth, 9999).status_code == 404
+
+
+def test_detail_requires_session(client, data):
+    assert client.get(f"/api/grupos/{data['fisica']}").status_code == 401

@@ -60,7 +60,7 @@ app/
     ├── auth.py      # /api/auth: registro, verificación, login y /me
     ├── perfil.py    # /api/perfil: editar el perfil y «mis asignaturas»
     ├── asignaturas.py  # /api/asignaturas: catálogo para autocompletar siglas
-    └── grupos.py    # /api/grupos: buscar y filtrar
+    └── grupos.py    # /api/grupos: buscar, filtrar y ver el detalle
 migrations/          # migraciones de Alembic
 tests/
 ├── conftest.py      # cliente de pruebas con base SQLite y bandeja de correos
@@ -134,6 +134,11 @@ correos en vez de enviarlos (ver `tests/test_auth.py`).
 
 Devuelve solo grupos no eliminados y vigentes (`vigente_hasta` desde hoy, hora de Chile), con los
 abiertos primero. No incluye `lugar` ni `enlace`: solo los ven los integrantes.
+
+`GET /api/grupos/{id}` (requiere sesión) devuelve el detalle: lo mismo que el buscador más
+`creador`, `integrantes` (nombre, carrera y si es el creador; sin correo) y `es_miembro`. `lugar` y
+`enlace` vienen solo si el usuario es integrante. Los grupos de otra universidad, eliminados o
+vencidos responden 404.
 
 `app/text.py` tiene `normalize_code()` para guardar las siglas igual que se buscan (B05).
 
