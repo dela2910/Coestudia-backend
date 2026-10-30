@@ -224,6 +224,18 @@ class GrupoMioOut(GrupoResumenOut):
     solicitudes: list[SolicitudOut]
 
 
+class MiSolicitudOut(BaseModel):
+    """Solicitud enviada por el usuario, con el grupo como en el buscador (sin lugar ni enlace:
+    los ve recién al entrar)."""
+
+    id: int
+    estado: str
+    mensaje: str | None
+    creada_en: datetime
+    respondida_en: datetime | None
+    grupo: GrupoResumenOut
+
+
 class MisGruposOut(BaseModel):
     creados: list[GrupoMioOut]
     participo: list[GrupoMioOut]

@@ -303,3 +303,65 @@ def test_only_the_owner_can_answer(client, users, who):
 
 def test_answer_requires_session(client):
     assert client.post("/api/solicitudes/1/aceptar").status_code == 401
+
+
+# --- Mis solicitudes ---
+
+
+def my_requests(client, auth):
+    response = client.get("/api/solicitudes/mias", headers=auth)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_my_requests_starts_empty(client, users):
+    assert my_requests(client, users["luis"]) == []
+
+
+def test_my_requests_requires_session(client):
+    assert client.get("/api/solicitudes/mias").status_code == 401
+
+
+def test_my_requests_show_state_newest_first(client, users):
+    first = create_group(client, users["ana"])
+    second = create_group(client, users["sofia"], sigla="FIS1513", nombre_asignatura="Física I")
+    third = create_group(client, users["ana"], sigla="MAT1203", nombre_asignatura="Álgebra")
+    ask(client, users["luis"], first, "Voy atrasado con series")
+    ask(client, users["luis"], second)
+    ask(client, users["luis"], third)
+    answer(client, users["ana"], pending_ids(client, users["ana"])[0], "aceptar")
+    answer(client, users["sofia"], pending_ids(client, users["sofia"])[0], "rechazar")
+
+    requests = my_requests(client, users["luis"])
+
+    assert [(r["grupo"]["id"], r["estado"]) for r in requests] == [
+        (third, "pendiente"),
+        (second, "rechazada"),
+        (first, "aceptada"),
+    ]
+    assert requests[2]["mensaje"] == "Voy atrasado con series"
+    assert requests[2]["respondida_en"] is not None
+    assert requests[0]["respondida_en"] is None
+    # El grupo viene como en el buscador: sin lugar ni enlace
+    assert requests[0]["grupo"]["asignatura"]["sigla"] == "MAT1203"
+    assert "lugar" not in requests[0]["grupo"]
+
+
+def test_my_requests_skip_cancelled_and_expired(client, users, session_factory):
+    cancelled = create_group(client, users["ana"])
+    expired = create_group(client, users["sofia"])
+    ask(client, users["luis"], cancelled)
+    ask(client, users["luis"], expired)
+    client.delete(f"/api/grupos/{cancelled}/solicitudes", headers=users["luis"])
+    with session_factory() as db:
+        db.get(GrupoEstudio, expired).vigente_hasta = today_in_chile() - timedelta(days=1)
+        db.commit()
+
+    assert my_requests(client, users["luis"]) == []
+
+
+def test_my_requests_only_mine(client, users):
+    group_id = create_group(client, users["ana"])
+    ask(client, users["luis"], group_id)
+
+    assert my_requests(client, users["sofia"]) == []

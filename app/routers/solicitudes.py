@@ -1,15 +1,38 @@
-"""Responder solicitudes para unirse a un grupo. Solo el creador del grupo puede hacerlo."""
+"""Solicitudes para unirse a un grupo: las que envió el usuario («mis solicitudes») y responder
+las de sus grupos (solo el creador)."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import MiembroGrupo, Solicitud, Usuario, now_utc
-from app.routers.grupos import is_active, mine_out
-from app.schemas import GrupoMioOut
+from app.routers.grupos import is_active, mine_out, summary_fields
+from app.schemas import GrupoMioOut, GrupoResumenOut, MiSolicitudOut
 from app.security import current_user
 
 router = APIRouter(prefix="/api/solicitudes", tags=["solicitudes"])
+
+
+@router.get("/mias", response_model=list[MiSolicitudOut])
+def my_requests(user: Usuario = Depends(current_user)):
+    """Solicitudes que envió el usuario a grupos vigentes, las más recientes primero. Las que
+    canceló no aparecen."""
+    requests = sorted(
+        (s for s in user.solicitudes if s.estado != "cancelada" and is_active(s.grupo)),
+        key=lambda s: (s.creada_en, s.id),
+        reverse=True,
+    )
+    return [
+        MiSolicitudOut(
+            id=s.id,
+            estado=s.estado,
+            mensaje=s.mensaje,
+            creada_en=s.creada_en,
+            respondida_en=s.respondida_en,
+            grupo=GrupoResumenOut(**summary_fields(s.grupo, len(s.grupo.miembros))),
+        )
+        for s in requests
+    ]
 
 
 def pending_of_my_group(db: Session, solicitud_id: int, user: Usuario) -> Solicitud:
