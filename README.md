@@ -60,7 +60,7 @@ app/
     ├── auth.py      # /api/auth: registro, verificación, login y /me
     ├── perfil.py    # /api/perfil: editar el perfil y «mis asignaturas»
     ├── asignaturas.py  # /api/asignaturas: catálogo para autocompletar siglas
-    └── grupos.py    # /api/grupos: buscar, filtrar y ver el detalle
+    └── grupos.py    # /api/grupos: buscar, filtrar, ver el detalle y crear
 migrations/          # migraciones de Alembic
 tests/
 ├── conftest.py      # cliente de pruebas con base SQLite y bandeja de correos
@@ -139,6 +139,23 @@ abiertos primero. No incluye `lugar` ni `enlace`: solo los ven los integrantes.
 `creador`, `integrantes` (nombre, carrera y si es el creador; sin correo) y `es_miembro`. `lugar` y
 `enlace` vienen solo si el usuario es integrante. Los grupos de otra universidad, eliminados o
 vencidos responden 404.
+
+`POST /api/grupos` (requiere sesión) crea un grupo en la universidad del usuario y responde 201 con
+el mismo formato del detalle. El creador queda como primer integrante.
+
+| Campo               | Ejemplo                                     | Regla                                   |
+| ------------------- | ------------------------------------------- | --------------------------------------- |
+| `sigla`             | `mat 1620`                                  | Se normaliza (`MAT1620`)                |
+| `nombre_asignatura` | `Cálculo II`                                | Solo si la sigla aún no existe          |
+| `descripcion`       | `Repaso para el certamen`                   | Opcional, hasta 280 caracteres          |
+| `es_online`         | `false`                                     |                                         |
+| `lugar` / `enlace`  | `Biblioteca` / `https://meet.google.com/…`  | Lugar si es presencial, enlace si online |
+| `cupo_maximo`       | `4`                                         | Entre 2 y 10, incluye al creador        |
+| `vigente_hasta`     | `2026-12-04`                                | Posterior a hoy                         |
+| `horarios`          | `[{"dia_semana": 1, "es_manana": false}]`   | Al menos uno; los repetidos se ignoran  |
+
+Si la sigla no existe y no viene `nombre_asignatura`, responde 404 para que el frontend pida el
+nombre (igual que en «mis asignaturas»).
 
 `app/text.py` tiene `normalize_code()` para guardar las siglas igual que se buscan (B05).
 
