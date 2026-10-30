@@ -61,7 +61,7 @@ app/
     ├── perfil.py    # /api/perfil: editar el perfil y «mis asignaturas»
     ├── asignaturas.py  # /api/asignaturas: catálogo para autocompletar siglas
     ├── grupos.py    # /api/grupos: buscar, filtrar, detalle, crear, mis grupos y pedir unirse
-    └── solicitudes.py  # /api/solicitudes: aceptar o rechazar (solo el creador)
+    └── solicitudes.py  # /api/solicitudes: mis solicitudes; aceptar o rechazar (el creador)
 migrations/          # migraciones de Alembic
 tests/
 ├── conftest.py      # cliente de pruebas con base SQLite y bandeja de correos
@@ -169,12 +169,15 @@ el usuario es integrante, con `lugar`, `enlace` y `es_creador`. En los que creó
 | --------------------------------------- | ------------ | ------------------------------------------------ |
 | `POST /api/grupos/{id}/solicitudes`     | Cualquiera   | Pide unirse; `{mensaje?}` opcional (201)         |
 | `DELETE /api/grupos/{id}/solicitudes`   | Quien la pidió | Cancela su solicitud pendiente                 |
+| `GET /api/solicitudes/mias`             | Quien las envió | «Mis solicitudes»: pendientes, aceptadas y rechazadas |
 | `POST /api/solicitudes/{id}/aceptar`    | Creador      | Suma al integrante; si se llena el cupo, cierra el grupo |
 | `POST /api/solicitudes/{id}/rechazar`   | Creador      | La rechaza                                       |
 
 No se puede pedir unirse a un grupo del que ya eres integrante, cerrado, sin cupo o con otra
 solicitud pendiente tuya (409). Pedir y cancelar devuelven el detalle del grupo, con
-`solicitud_pendiente`; aceptar y rechazar devuelven el grupo como en «mis grupos». A quien no es el
+`solicitud_pendiente`; aceptar y rechazar devuelven el grupo como en «mis grupos». «Mis
+solicitudes» trae solo las de grupos vigentes, las más recientes primero y sin las canceladas; el
+grupo viene como en el buscador, sin lugar ni enlace. A quien no es el
 creador, las rutas de `/api/solicitudes` le responden 404.
 
 `app/text.py` tiene `normalize_code()` para guardar las siglas igual que se buscan (B05).
