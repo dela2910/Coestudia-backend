@@ -60,12 +60,14 @@ app/
     ├── auth.py      # /api/auth: registro, verificación, login y /me
     ├── perfil.py    # /api/perfil: editar el perfil y «mis asignaturas»
     ├── asignaturas.py  # /api/asignaturas: catálogo para autocompletar siglas
-    └── grupos.py    # /api/grupos: buscar, filtrar, ver el detalle y crear
+    ├── grupos.py    # /api/grupos: buscar, filtrar, detalle, crear, mis grupos y pedir unirse
+    └── solicitudes.py  # /api/solicitudes: aceptar o rechazar (solo el creador)
 migrations/          # migraciones de Alembic
 tests/
 ├── conftest.py      # cliente de pruebas con base SQLite y bandeja de correos
 ├── test_auth.py
 ├── test_grupos.py
+├── test_solicitudes.py
 ├── test_hello.py
 ├── test_rate_limit.py
 ├── test_seed.py
@@ -156,6 +158,24 @@ el mismo formato del detalle. El creador queda como primer integrante.
 
 Si la sigla no existe y no viene `nombre_asignatura`, responde 404 para que el frontend pida el
 nombre (igual que en «mis asignaturas»).
+
+`GET /api/grupos/mios` (requiere sesión) devuelve `{creados, participo}`: los grupos vigentes donde
+el usuario es integrante, con `lugar`, `enlace` y `es_creador`. En los que creó vienen además las
+`solicitudes` pendientes (quién la envió, su carrera y el mensaje).
+
+### Solicitudes para unirse
+
+| Método y ruta                           | Quién        | Qué hace                                         |
+| --------------------------------------- | ------------ | ------------------------------------------------ |
+| `POST /api/grupos/{id}/solicitudes`     | Cualquiera   | Pide unirse; `{mensaje?}` opcional (201)         |
+| `DELETE /api/grupos/{id}/solicitudes`   | Quien la pidió | Cancela su solicitud pendiente                 |
+| `POST /api/solicitudes/{id}/aceptar`    | Creador      | Suma al integrante; si se llena el cupo, cierra el grupo |
+| `POST /api/solicitudes/{id}/rechazar`   | Creador      | La rechaza                                       |
+
+No se puede pedir unirse a un grupo del que ya eres integrante, cerrado, sin cupo o con otra
+solicitud pendiente tuya (409). Pedir y cancelar devuelven el detalle del grupo, con
+`solicitud_pendiente`; aceptar y rechazar devuelven el grupo como en «mis grupos». A quien no es el
+creador, las rutas de `/api/solicitudes` le responden 404.
 
 `app/text.py` tiene `normalize_code()` para guardar las siglas igual que se buscan (B05).
 

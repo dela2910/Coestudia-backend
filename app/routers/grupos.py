@@ -1,5 +1,5 @@
-"""Grupos de estudio. Buscar y filtrar (CU04, RF06–07), ver el detalle (CU05, RF08) y crear
-grupos."""
+"""Grupos de estudio. Buscar y filtrar (CU04, RF06–07), ver el detalle (CU05, RF08), crear
+grupos, «mis grupos» y pedir unirse a un grupo."""
 
 from typing import Annotated
 
@@ -10,15 +10,29 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
-from app.models import Asignatura, GrupoEstudio, HorarioGrupo, MiembroGrupo, Usuario, today_in_chile
+from app.models import (
+    Asignatura,
+    GrupoEstudio,
+    HorarioGrupo,
+    MiembroGrupo,
+    Solicitud,
+    Usuario,
+    now_utc,
+    today_in_chile,
+)
 from app.routers.perfil import VALID_CODE, find_subject
 from app.schemas import (
     AsignaturaOut,
     GrupoDetalleOut,
     GrupoIn,
+    GrupoMioOut,
     GrupoResumenOut,
     HorarioOut,
     IntegranteOut,
+    MisGruposOut,
+    SolicitanteOut,
+    SolicitudIn,
+    SolicitudOut,
 )
 from app.security import current_user
 from app.text import normalize_code, normalize_text
@@ -108,6 +122,43 @@ def search_groups(
     return [GrupoResumenOut(**summary_fields(group, total)) for group, total in db.execute(stmt)]
 
 
+def is_active(group: GrupoEstudio) -> bool:
+    return group.eliminado_en is None and group.vigente_hasta >= today_in_chile()
+
+
+def visible_group(db: Session, grupo_id: int, user: Usuario) -> GrupoEstudio:
+    """Grupo vigente de la universidad del usuario, o 404."""
+    group = db.get(GrupoEstudio, grupo_id)
+    # Los grupos de otra universidad, eliminados o vencidos no aparecen en el buscador: tampoco
+    # se pueden abrir con el id
+    if group is None or group.asignatura.universidad != user.universidad or not is_active(group):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Este grupo no existe o ya no está disponible."
+        )
+    return group
+
+
+def pending_request(group: GrupoEstudio, user_id: int) -> Solicitud | None:
+    return next(
+        (s for s in group.solicitudes if s.usuario_id == user_id and s.estado == "pendiente"),
+        None,
+    )
+
+
+@router.get("/mios", response_model=MisGruposOut)
+def my_groups(user: Usuario = Depends(current_user)):
+    """Grupos vigentes donde el usuario es integrante, separados en los que creó y en los que
+    participa. Los más próximos a vencer primero."""
+    groups = sorted(
+        (m.grupo for m in user.membresias if is_active(m.grupo)),
+        key=lambda g: (g.vigente_hasta, g.id),
+    )
+    return MisGruposOut(
+        creados=[mine_out(g, user) for g in groups if g.creador_id == user.id],
+        participo=[mine_out(g, user) for g in groups if g.creador_id != user.id],
+    )
+
+
 @router.get("/{grupo_id}", response_model=GrupoDetalleOut)
 def group_detail(
     grupo_id: int, user: Usuario = Depends(current_user), db: Session = Depends(get_db)
@@ -116,18 +167,54 @@ def group_detail(
 
     Lugar y enlace se muestran solo a los integrantes (RNF de privacidad).
     """
-    group = db.get(GrupoEstudio, grupo_id)
-    # Los grupos de otra universidad, eliminados o vencidos no aparecen en el buscador: tampoco
-    # se pueden abrir con el id
-    if (
-        group is None
-        or group.asignatura.universidad != user.universidad
-        or group.eliminado_en is not None
-        or group.vigente_hasta < today_in_chile()
-    ):
+    return detail_out(visible_group(db, grupo_id, user), user)
+
+
+@router.post(
+    "/{grupo_id}/solicitudes", response_model=GrupoDetalleOut, status_code=status.HTTP_201_CREATED
+)
+def request_to_join(
+    grupo_id: int,
+    data: SolicitudIn | None = None,
+    user: Usuario = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """Pide unirse a un grupo abierto y con cupo. El creador la acepta o la rechaza."""
+    group = visible_group(db, grupo_id, user)
+    if any(m.usuario_id == user.id for m in group.miembros):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Ya eres integrante de este grupo.")
+    if pending_request(group, user.id) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Ya enviaste una solicitud a este grupo.")
+    if not group.abierto:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Este grupo está cerrado.")
+    if len(group.miembros) >= group.cupo_maximo:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Este grupo ya no tiene cupos.")
+
+    message = data.mensaje if data and data.mensaje else None
+    group.solicitudes.append(Solicitud(usuario=user, mensaje=message))
+    try:
+        db.commit()
+    except IntegrityError:
+        # La misma persona la envió dos veces al mismo tiempo (índice uq_solicitud_pendiente)
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "Ya enviaste una solicitud a este grupo.")
+    return detail_out(group, user)
+
+
+@router.delete("/{grupo_id}/solicitudes", response_model=GrupoDetalleOut)
+def cancel_request(
+    grupo_id: int, user: Usuario = Depends(current_user), db: Session = Depends(get_db)
+):
+    """Retira la solicitud pendiente del usuario antes de que el creador responda."""
+    group = visible_group(db, grupo_id, user)
+    request = pending_request(group, user.id)
+    if request is None:
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Este grupo no existe o ya no está disponible."
+            status.HTTP_404_NOT_FOUND, "No tienes una solicitud pendiente en este grupo."
         )
+    request.estado = "cancelada"
+    request.cancelada_en = now_utc()
+    db.commit()
     return detail_out(group, user)
 
 
@@ -216,6 +303,36 @@ def detail_out(group: GrupoEstudio, user: Usuario) -> GrupoDetalleOut:
             for m in members
         ],
         es_miembro=is_member,
+        solicitud_pendiente=pending_request(group, user.id) is not None,
         lugar=group.lugar if is_member else None,
         enlace=group.enlace if is_member else None,
+    )
+
+
+def mine_out(group: GrupoEstudio, user: Usuario) -> GrupoMioOut:
+    """Grupo de «mis grupos». Solo el creador ve las solicitudes pendientes, las más antiguas
+    primero."""
+    is_owner = group.creador_id == user.id
+    pending = (
+        sorted(
+            (s for s in group.solicitudes if s.estado == "pendiente"),
+            key=lambda s: (s.creada_en, s.id),
+        )
+        if is_owner
+        else []
+    )
+    return GrupoMioOut(
+        **summary_fields(group, len(group.miembros)),
+        es_creador=is_owner,
+        lugar=group.lugar,
+        enlace=group.enlace,
+        solicitudes=[
+            SolicitudOut(
+                id=s.id,
+                usuario=SolicitanteOut.model_validate(s.usuario),
+                mensaje=s.mensaje,
+                creada_en=s.creada_en,
+            )
+            for s in pending
+        ],
     )
