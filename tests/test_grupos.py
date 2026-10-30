@@ -332,6 +332,15 @@ def test_create_group_with_new_subject(client, auth, session_factory):
         assert subject.universidad == UC
 
 
+def test_same_new_subject_at_the_same_time(client, auth, monkeypatch):
+    create(client, auth, sigla="IIC2233", nombre_asignatura="Programación Avanzada")
+    # Simula que otra persona creó la sigla justo antes: la frena UNIQUE (sigla, universidad)
+    monkeypatch.setattr("app.routers.grupos.find_subject", lambda db, code, university: None)
+
+    response = create(client, auth, sigla="IIC2233", nombre_asignatura="Programación Avanzada")
+    assert response.status_code == 409
+
+
 def test_new_subject_needs_a_name(client, auth):
     response = create(client, auth, sigla="IIC2233")
 

@@ -185,5 +185,45 @@ class GrupoDetalleOut(GrupoResumenOut):
     creador: str
     integrantes: list[IntegranteOut]
     es_miembro: bool
+    # El usuario ya pidió unirse y el creador aún no responde
+    solicitud_pendiente: bool
     lugar: str | None
     enlace: str | None
+
+
+class SolicitudIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    mensaje: str | None = Field(default=None, max_length=280)
+
+
+class SolicitanteOut(BaseModel):
+    """Quien pide unirse, tal como lo ve el creador. Sin correo, igual que los integrantes."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    nombre: str
+    carrera: str | None
+
+
+class SolicitudOut(BaseModel):
+    id: int
+    usuario: SolicitanteOut
+    mensaje: str | None
+    creada_en: datetime
+
+
+class GrupoMioOut(GrupoResumenOut):
+    """Grupo en «mis grupos». El usuario es integrante, así que ve lugar y enlace; si es el
+    creador, también las solicitudes pendientes."""
+
+    es_creador: bool
+    lugar: str | None
+    enlace: str | None
+    solicitudes: list[SolicitudOut]
+
+
+class MisGruposOut(BaseModel):
+    creados: list[GrupoMioOut]
+    participo: list[GrupoMioOut]
