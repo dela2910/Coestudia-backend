@@ -1,17 +1,21 @@
-"""Grupos de estudio. Buscar y filtrar (CU04, RF06–07) y ver el detalle (CU05, RF08)."""
+"""Grupos de estudio. Buscar y filtrar (CU04, RF06–07), ver el detalle (CU05, RF08) y crear
+grupos."""
 
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import Field
 from sqlalchemy import exists, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.models import Asignatura, GrupoEstudio, HorarioGrupo, MiembroGrupo, Usuario, today_in_chile
+from app.routers.perfil import VALID_CODE, find_subject
 from app.schemas import (
     AsignaturaOut,
     GrupoDetalleOut,
+    GrupoIn,
     GrupoResumenOut,
     HorarioOut,
     IntegranteOut,
@@ -124,7 +128,76 @@ def group_detail(
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Este grupo no existe o ya no está disponible."
         )
+    return detail_out(group, user)
 
+
+@router.post("", response_model=GrupoDetalleOut, status_code=status.HTTP_201_CREATED)
+def create_group(
+    data: GrupoIn, user: Usuario = Depends(current_user), db: Session = Depends(get_db)
+):
+    """Crea un grupo en la universidad del usuario. El creador queda como su primer integrante.
+
+    La asignatura se busca por sigla y, si no existe, se crea con el nombre recibido.
+    """
+    code = normalize_code(data.sigla)
+    if not VALID_CODE.fullmatch(code):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "La sigla debe tener entre 3 y 20 letras o números, ej. MAT1620.",
+        )
+    if data.vigente_hasta <= today_in_chile():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "La fecha de vigencia debe ser posterior a hoy.",
+        )
+    if data.es_online:
+        link = data.enlace or ""
+        if not link.startswith(("https://", "http://")):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "Escribe el enlace de la reunión, ej. https://meet.google.com/abc-defg-hij.",
+            )
+    elif not data.lugar:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Escribe dónde se van a juntar.")
+
+    subject = find_subject(db, code, user.universidad)
+    if subject is None:
+        name = " ".join((data.nombre_asignatura or "").split())
+        if not name:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"{code} aún no está en Coestudia. Escribe su nombre para crear el grupo.",
+            )
+        subject = Asignatura(sigla=code, nombre=name, universidad=user.universidad)
+
+    group = GrupoEstudio(
+        asignatura=subject,
+        creador=user,
+        descripcion=data.descripcion or None,
+        es_online=data.es_online,
+        lugar=None if data.es_online else data.lugar,
+        enlace=data.enlace if data.es_online else None,
+        cupo_maximo=data.cupo_maximo,
+        vigente_hasta=data.vigente_hasta,
+    )
+    # Sin repetidos: el frontend manda cada combinación de día y bloque elegidos
+    schedule = {(h.dia_semana, h.es_manana) for h in data.horarios}
+    group.horarios = [HorarioGrupo(dia_semana=d, es_manana=m) for d, m in sorted(schedule)]
+    group.miembros = [MiembroGrupo(usuario=user)]
+    db.add(group)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Otra persona creó la misma sigla al mismo tiempo
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "No pudimos crear el grupo. Intenta de nuevo."
+        )
+    return detail_out(group, user)
+
+
+def detail_out(group: GrupoEstudio, user: Usuario) -> GrupoDetalleOut:
+    """Detalle del grupo visto por `user`. Lugar y enlace solo si es integrante."""
     # El creador primero y después en el orden en que entraron
     members = sorted(
         group.miembros, key=lambda m: (m.usuario_id != group.creador_id, m.unido_en, m.usuario_id)

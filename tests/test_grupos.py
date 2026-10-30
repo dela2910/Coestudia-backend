@@ -248,3 +248,151 @@ def test_detail_of_missing_group(client, auth, data):
 
 def test_detail_requires_session(client, data):
     assert client.get(f"/api/grupos/{data['fisica']}").status_code == 401
+
+
+# --- Crear grupo ---
+
+
+def new_group(**fields):
+    """Cuerpo válido para POST /api/grupos: presencial, de Cálculo II, martes en la tarde."""
+    return {
+        "sigla": "MAT1620",
+        "descripcion": "Repaso para el certamen",
+        "es_online": False,
+        "lugar": "Biblioteca central",
+        "cupo_maximo": 4,
+        "vigente_hasta": str(today_in_chile() + timedelta(days=30)),
+        "horarios": [{"dia_semana": 1, "es_manana": False}],
+        **fields,
+    }
+
+
+def create(client, auth, **fields):
+    return client.post("/api/grupos", json=new_group(**fields), headers=auth)
+
+
+def test_create_group_with_existing_subject(client, auth, data):
+    response = create(client, auth, sigla="mat 1620")
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["asignatura"]["sigla"] == "MAT1620"
+    assert body["asignatura"]["nombre"] == "Cálculo II"
+    assert body["creador"] == "Camila Pérez"
+    assert body["es_miembro"] is True
+    assert body["miembros"] == 1
+    assert body["abierto"] is True
+    assert body["lugar"] == "Biblioteca central"
+    assert body["enlace"] is None
+
+
+def test_created_group_appears_in_search(client, auth, data):
+    group_id = create(client, auth, horarios=[{"dia_semana": 5, "es_manana": True}]).json()["id"]
+
+    assert group_id in ids(search(client, auth, q="calculo", dia=5))
+
+
+def test_other_users_find_the_group_without_place(client, auth, data, session_factory):
+    group_id = create(client, auth).json()["id"]
+
+    # Un segundo usuario de la misma universidad
+    client.post(
+        "/api/auth/registro",
+        json={
+            "email": "luis.castro@uc.cl",
+            "password": "Clave-segura-1",
+            "nombre": "Luis Castro",
+            "carrera": "Ingeniería Comercial",
+            "anio_ingreso": 2022,
+            "acepta_terminos": True,
+        },
+    )
+    with session_factory() as db:
+        luis = db.query(Usuario).filter_by(email="luis.castro@uc.cl").one()
+        luis.email_verificado_en = now_utc()
+        db.commit()
+    token = client.post(
+        "/api/auth/login", json={"email": "luis.castro@uc.cl", "password": "Clave-segura-1"}
+    ).json()["access_token"]
+    luis_auth = {"Authorization": f"Bearer {token}"}
+
+    assert group_id in ids(search(client, luis_auth, q="MAT1620"))
+    body = detail(client, luis_auth, group_id).json()
+    assert body["es_miembro"] is False
+    assert body["lugar"] is None
+
+
+def test_create_group_with_new_subject(client, auth, session_factory):
+    response = create(client, auth, sigla="iic2233", nombre_asignatura="  Programación   Avanzada ")
+
+    assert response.status_code == 201
+    assert response.json()["asignatura"]["nombre"] == "Programación Avanzada"
+    with session_factory() as db:
+        subject = db.query(Asignatura).filter_by(sigla="IIC2233").one()
+        assert subject.universidad == UC
+
+
+def test_new_subject_needs_a_name(client, auth):
+    response = create(client, auth, sigla="IIC2233")
+
+    assert response.status_code == 404
+    assert "IIC2233" in response.json()["detail"]
+
+
+def test_name_is_ignored_when_subject_exists(client, auth, data):
+    response = create(client, auth, nombre_asignatura="Otro nombre")
+    assert response.json()["asignatura"]["nombre"] == "Cálculo II"
+
+
+def test_online_group_keeps_only_the_link(client, auth, data):
+    response = create(
+        client, auth, es_online=True, enlace="https://meet.google.com/abc", lugar="Biblioteca"
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert (body["es_online"], body["enlace"], body["lugar"]) == (
+        True,
+        "https://meet.google.com/abc",
+        None,
+    )
+
+
+def test_schedule_without_duplicates(client, auth, data):
+    horarios = [
+        {"dia_semana": 3, "es_manana": False},
+        {"dia_semana": 0, "es_manana": True},
+        {"dia_semana": 3, "es_manana": False},
+    ]
+    response = create(client, auth, horarios=horarios)
+
+    assert response.json()["horarios"] == [
+        {"dia_semana": 0, "es_manana": True},
+        {"dia_semana": 3, "es_manana": False},
+    ]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"sigla": "AB"},
+        {"sigla": "MAT-1620"},
+        {"lugar": None},
+        {"lugar": "   "},
+        {"es_online": True, "enlace": None},
+        {"es_online": True, "enlace": "meet.google.com/abc"},
+        {"cupo_maximo": 1},
+        {"cupo_maximo": 11},
+        {"horarios": []},
+        {"horarios": [{"dia_semana": 6, "es_manana": True}]},
+        {"vigente_hasta": str(today_in_chile())},
+        {"vigente_hasta": str(today_in_chile() - timedelta(days=1))},
+        {"descripcion": "x" * 281},
+    ],
+)
+def test_create_group_validates_fields(client, auth, data, fields):
+    assert create(client, auth, **fields).status_code == 422
+
+
+def test_create_group_requires_session(client):
+    assert client.post("/api/grupos", json=new_group()).status_code == 401

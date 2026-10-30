@@ -129,6 +129,32 @@ class HorarioOut(BaseModel):
     es_manana: bool
 
 
+class HorarioIn(BaseModel):
+    # 0 = lunes ... 5 = sábado
+    dia_semana: int = Field(ge=0, le=5)
+    es_manana: bool
+
+
+class GrupoIn(BaseModel):
+    """Grupo nuevo. Si la sigla no existe en la universidad del creador, se crea la
+    asignatura con `nombre_asignatura` ("buscar o crear")."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    sigla: str = Field(min_length=1, max_length=20)
+    nombre_asignatura: str | None = Field(default=None, max_length=200)
+    descripcion: str | None = Field(default=None, max_length=280)
+    es_online: bool
+    # Lugar si es presencial, enlace si es online; el otro se ignora
+    lugar: str | None = Field(default=None, max_length=200)
+    enlace: str | None = Field(default=None, max_length=500)
+    # Incluye al creador
+    cupo_maximo: int = Field(ge=2, le=10)
+    vigente_hasta: date
+    # 6 días x 2 bloques
+    horarios: list[HorarioIn] = Field(min_length=1, max_length=12)
+
+
 class GrupoResumenOut(BaseModel):
     """Grupo en los resultados del buscador. No incluye lugar ni enlace: solo los ven los
     integrantes (RNF de privacidad)."""
