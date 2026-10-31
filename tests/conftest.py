@@ -36,6 +36,17 @@ def outbox(monkeypatch):
 
 
 @pytest.fixture
+def reset_outbox(monkeypatch):
+    """Correos de recuperar contraseña que la API habría enviado: (destinatario, nombre, token)."""
+    sent = []
+    monkeypatch.setattr(
+        "app.routers.auth.send_password_reset_email",
+        lambda to, name, token: sent.append((to, name, token)),
+    )
+    return sent
+
+
+@pytest.fixture
 def client(session_factory, outbox):
     def override_get_db():
         with session_factory() as session:

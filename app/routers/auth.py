@@ -1,4 +1,5 @@
-"""Registro, verificación del correo e inicio de sesión (CU01–02, RF01–02, RF17)."""
+"""Registro, verificación del correo, inicio de sesión y recuperar contraseña
+(CU01–02, RF01–02, RF17)."""
 
 import logging
 from datetime import timedelta
@@ -9,15 +10,25 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.mailer import send_verification_email
+from app.mailer import send_password_reset_email, send_verification_email
 from app.models import TokenCorreo, Usuario
 from app.rate_limit import login_limiter
-from app.schemas import EmailIn, LoginIn, MensajeOut, RegistroIn, SesionOut, TokenIn, UsuarioOut
+from app.schemas import (
+    EmailIn,
+    LoginIn,
+    MensajeOut,
+    RegistroIn,
+    RestablecerIn,
+    SesionOut,
+    TokenIn,
+    UsuarioOut,
+)
 from app.security import (
     DUMMY_PASSWORD_HASH,
     EMAIL_MAX_PER_DAY,
     EMAIL_RESEND_COOLDOWN,
     EMAIL_TOKEN_TTL,
+    PASSWORD_RESET_TTL,
     as_utc,
     create_access_token,
     current_user,
@@ -34,6 +45,9 @@ logger = logging.getLogger("coestudia.auth")
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 INVALID_LINK = "El enlace de verificación no es válido o ya expiró. Pide uno nuevo."
+INVALID_RESET_LINK = (
+    "El enlace para cambiar la contraseña no es válido o ya expiró. Pide uno nuevo."
+)
 
 
 def find_active_user(db: Session, email: str) -> Usuario | None:
@@ -41,17 +55,24 @@ def find_active_user(db: Session, email: str) -> Usuario | None:
     return user if user is not None and user.eliminado_en is None else None
 
 
-def issue_verification_token(db: Session, user: Usuario) -> str:
-    # Al pedir un enlace nuevo, los anteriores dejan de servir
+def invalidate_tokens(user: Usuario, tipo: str) -> None:
+    """Marca como usados los enlaces de ese tipo que todavía no se usaron."""
     now = now_utc()
     for old in user.tokens:
-        if old.tipo == "verificacion" and old.usado_en is None:
+        if old.tipo == tipo and old.usado_en is None:
             old.usado_en = now
+
+
+def issue_email_token(user: Usuario, tipo: str, ttl: timedelta) -> str:
+    # Al pedir un enlace nuevo, los anteriores del mismo tipo dejan de servir
+    invalidate_tokens(user, tipo)
     token, token_hash = new_email_token()
-    user.tokens.append(
-        TokenCorreo(token_hash=token_hash, tipo="verificacion", expira_en=now + EMAIL_TOKEN_TTL)
-    )
+    user.tokens.append(TokenCorreo(token_hash=token_hash, tipo=tipo, expira_en=now_utc() + ttl))
     return token
+
+
+def issue_verification_token(db: Session, user: Usuario) -> str:
+    return issue_email_token(user, "verificacion", EMAIL_TOKEN_TTL)
 
 
 def has_pending_verification(user: Usuario) -> bool:
@@ -63,10 +84,10 @@ def has_pending_verification(user: Usuario) -> bool:
     )
 
 
-def can_resend(user: Usuario) -> bool:
-    """Como máximo un correo por minuto y EMAIL_MAX_PER_DAY al día por cuenta."""
+def can_resend(user: Usuario, tipo: str = "verificacion") -> bool:
+    """Como máximo un correo por minuto y EMAIL_MAX_PER_DAY al día por cuenta (y tipo)."""
     now = now_utc()
-    sent = [as_utc(t.creado_en) for t in user.tokens if t.tipo == "verificacion"]
+    sent = [as_utc(t.creado_en) for t in user.tokens if t.tipo == tipo]
     if any(now - created < EMAIL_RESEND_COOLDOWN for created in sent):
         return False
     return sum(now - created < timedelta(days=1) for created in sent) < EMAIL_MAX_PER_DAY
@@ -209,3 +230,54 @@ def login(data: LoginIn, request: Request, db: Session = Depends(get_db)):
 def me(user: Usuario = Depends(current_user)):
     """Usuario de la sesión actual; el frontend lo usa para recuperar la sesión al recargar."""
     return user
+
+
+# --- Recuperar contraseña ---
+
+
+@router.post(
+    "/recuperar-contrasena", response_model=MensajeOut, status_code=status.HTTP_202_ACCEPTED
+)
+def request_password_reset(data: EmailIn, db: Session = Depends(get_db)):
+    """Envía un enlace para elegir una contraseña nueva (solo a cuentas verificadas)."""
+    user = find_active_user(db, data.email)
+    if (
+        user is not None
+        and user.email_verificado_en is not None
+        and can_resend(user, "recuperar_contrasena")
+    ):
+        token = issue_email_token(user, "recuperar_contrasena", PASSWORD_RESET_TTL)
+        db.commit()
+        try:
+            send_password_reset_email(user.email, user.nombre, token)
+        except Exception:
+            logger.exception("No se pudo enviar el correo de recuperación a %s", user.email)
+    # Misma respuesta siempre, para no revelar qué correos están registrados
+    return MensajeOut(
+        message="Si existe una cuenta con ese correo, te enviamos un enlace para cambiar la "
+        "contraseña."
+    )
+
+
+@router.post("/restablecer-contrasena", response_model=MensajeOut)
+def reset_password(data: RestablecerIn, db: Session = Depends(get_db)):
+    """Cambia la contraseña con el token del enlace y cierra las sesiones abiertas."""
+    record = db.scalar(
+        select(TokenCorreo).where(
+            TokenCorreo.token_hash == hash_token(data.token),
+            TokenCorreo.tipo == "recuperar_contrasena",
+        )
+    )
+    now = now_utc()
+    if record is None or record.usado_en is not None or as_utc(record.expira_en) < now:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_RESET_LINK)
+    user = record.usuario
+    if user.eliminado_en is not None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_RESET_LINK)
+
+    user.password_hash = hash_password(data.password)
+    # Los JWT emitidos antes de este momento dejan de valer (ver current_user)
+    user.contrasena_cambiada_en = now
+    invalidate_tokens(user, "recuperar_contrasena")
+    db.commit()
+    return MensajeOut(message="Tu contraseña se cambió. Ya puedes iniciar sesión con la nueva.")

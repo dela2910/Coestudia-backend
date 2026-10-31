@@ -4,7 +4,7 @@ import jwt
 import pytest
 
 from app.models import TokenCorreo, Usuario
-from app.security import JWT_ALGORITHM, jwt_secret, now_utc
+from app.security import JWT_ALGORITHM, as_utc, jwt_secret, now_utc
 
 NEW_USER = {
     "email": "Camila.Perez@UC.cl",
@@ -298,3 +298,124 @@ def test_password_change_closes_old_sessions(client, outbox, session_factory):
     response = client.get("/api/auth/me", headers=auth_header(token))
     assert response.status_code == 401
     assert "contraseña cambió" in response.json()["detail"]
+
+
+# --- Recuperar contraseña ---
+
+NEW_PASSWORD = "Otra-clave-2"
+
+
+def request_reset(client, email=NEW_USER["email"]):
+    return client.post("/api/auth/recuperar-contrasena", json={"email": email})
+
+
+def reset(client, token, password=NEW_PASSWORD):
+    return client.post(
+        "/api/auth/restablecer-contrasena", json={"token": token, "password": password}
+    )
+
+
+def login_with(client, password):
+    return client.post("/api/auth/login", json={"email": NEW_USER["email"], "password": password})
+
+
+def test_reset_password_flow(client, outbox, reset_outbox, session_factory):
+    register_and_verify(client, outbox)
+    response = request_reset(client, email="CAMILA.PEREZ@uc.cl")
+
+    assert response.status_code == 202
+    assert len(reset_outbox) == 1
+    assert reset_outbox[0][0] == "camila.perez@uc.cl"
+    with session_factory() as db:
+        record = db.query(TokenCorreo).filter_by(tipo="recuperar_contrasena").one()
+        # Se guarda solo el hash, y el enlace dura menos que el de verificación
+        assert record.token_hash != reset_outbox[0][2]
+        assert as_utc(record.expira_en) < now_utc() + timedelta(hours=2)
+
+    response = reset(client, reset_outbox[0][2])
+    assert response.status_code == 200
+    assert login_with(client, NEW_USER["password"]).status_code == 401
+    assert login_with(client, NEW_PASSWORD).status_code == 200
+
+
+def test_reset_closes_old_sessions(client, outbox, reset_outbox, session_factory):
+    token = register_and_verify(client, outbox)["access_token"]
+    request_reset(client)
+    reset(client, reset_outbox[0][2])
+    with session_factory() as db:
+        # El JWT guarda la hora en segundos: se adelanta el cambio para no depender del reloj
+        user = db.query(Usuario).one()
+        assert user.contrasena_cambiada_en is not None
+        user.contrasena_cambiada_en = now_utc() + timedelta(seconds=5)
+        db.commit()
+    assert client.get("/api/auth/me", headers=auth_header(token)).status_code == 401
+
+
+def test_reset_does_not_reveal_unknown_emails(client, reset_outbox):
+    response = request_reset(client, email="nadie@uc.cl")
+    assert response.status_code == 202
+    assert reset_outbox == []
+
+
+def test_reset_skips_unverified_and_deleted_accounts(client, outbox, reset_outbox, session_factory):
+    register(client)
+    assert request_reset(client).status_code == 202
+    assert reset_outbox == []
+
+    with session_factory() as db:
+        user = db.query(Usuario).one()
+        user.email_verificado_en = now_utc()
+        user.eliminado_en = now_utc()
+        db.commit()
+    assert request_reset(client).status_code == 202
+    assert reset_outbox == []
+
+
+def test_reset_token_is_single_use(client, outbox, reset_outbox):
+    register_and_verify(client, outbox)
+    request_reset(client)
+    token = reset_outbox[0][2]
+    assert reset(client, token).status_code == 200
+    response = reset(client, token, password="Tercera-clave-3")
+    assert response.status_code == 400
+    assert "no es válido" in response.json()["detail"]
+
+
+def test_reset_token_expires(client, outbox, reset_outbox, session_factory):
+    register_and_verify(client, outbox)
+    request_reset(client)
+    with session_factory() as db:
+        record = db.query(TokenCorreo).filter_by(tipo="recuperar_contrasena").one()
+        record.expira_en = now_utc() - timedelta(minutes=1)
+        db.commit()
+    assert reset(client, reset_outbox[0][2]).status_code == 400
+
+
+def test_new_reset_link_invalidates_previous(client, outbox, reset_outbox, session_factory):
+    register_and_verify(client, outbox)
+    request_reset(client)
+    make_tokens_older(session_factory, minutes=2)
+    request_reset(client)
+
+    assert len(reset_outbox) == 2
+    assert reset(client, reset_outbox[0][2]).status_code == 400
+    assert reset(client, reset_outbox[1][2]).status_code == 200
+
+
+def test_reset_waits_one_minute(client, outbox, reset_outbox):
+    register_and_verify(client, outbox)
+    request_reset(client)
+    assert request_reset(client).status_code == 202
+    assert len(reset_outbox) == 1
+
+
+def test_reset_rejects_verification_tokens(client, outbox):
+    register(client)
+    assert reset(client, outbox[0][2]).status_code == 400
+
+
+@pytest.mark.parametrize("password", ["corta1A", "sinmayuscula1", "SINMINUSCULA1", "SinNumero"])
+def test_reset_validates_new_password(client, outbox, reset_outbox, password):
+    register_and_verify(client, outbox)
+    request_reset(client)
+    assert reset(client, reset_outbox[0][2], password=password).status_code == 422
