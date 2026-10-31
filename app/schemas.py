@@ -21,21 +21,25 @@ class RegistroIn(BaseModel):
     @field_validator("password")
     @classmethod
     def password_is_strong(cls, value: str) -> str:
-        # Mismas reglas que muestra el formulario de registro (Login.jsx)
-        if len(value.encode()) > PASSWORD_MAX_BYTES:
-            raise ValueError("La contraseña puede tener como máximo 72 caracteres.")
-        if not any(c.isupper() for c in value):
-            raise ValueError("La contraseña debe tener al menos una mayúscula.")
-        if not any(c.islower() for c in value):
-            raise ValueError("La contraseña debe tener al menos una minúscula.")
-        if not any(c.isdigit() for c in value):
-            raise ValueError("La contraseña debe tener al menos un número.")
-        return value
+        return check_password_strength(value)
 
     @field_validator("anio_ingreso")
     @classmethod
     def entry_year_not_in_future(cls, value: int) -> int:
         return check_entry_year(value)
+
+
+def check_password_strength(value: str) -> str:
+    # Mismas reglas que muestra el formulario de registro (src/data/password.js en el frontend)
+    if len(value.encode()) > PASSWORD_MAX_BYTES:
+        raise ValueError("La contraseña puede tener como máximo 72 caracteres.")
+    if not any(c.isupper() for c in value):
+        raise ValueError("La contraseña debe tener al menos una mayúscula.")
+    if not any(c.islower() for c in value):
+        raise ValueError("La contraseña debe tener al menos una minúscula.")
+    if not any(c.isdigit() for c in value):
+        raise ValueError("La contraseña debe tener al menos un número.")
+    return value
 
 
 def check_entry_year(value: int) -> int:
@@ -90,6 +94,18 @@ class TokenIn(BaseModel):
 
 class EmailIn(BaseModel):
     email: EmailStr
+
+
+class RestablecerIn(BaseModel):
+    """Contraseña nueva, con el token del enlace de recuperación."""
+
+    token: str = Field(max_length=200)
+    password: str = Field(min_length=8)
+
+    @field_validator("password")
+    @classmethod
+    def password_is_strong(cls, value: str) -> str:
+        return check_password_strength(value)
 
 
 class UsuarioOut(BaseModel):

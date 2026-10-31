@@ -45,20 +45,42 @@ def send_email(to: str, subject: str, html: str, text: str) -> None:
     response.raise_for_status()
 
 
+def first_name(name: str) -> str:
+    return name.split()[0] if name.split() else name
+
+
 def send_verification_email(to: str, name: str, token: str) -> None:
     link = f"{frontend_url()}/?verificar={token}"
-    first_name = name.split()[0] if name.split() else name
     send_email(
         to,
         "Verifica tu correo en Coestudia",
         html=(
-            f"<p>Hola {escape(first_name)}:</p>"
+            f"<p>Hola {escape(first_name(name))}:</p>"
             "<p>Para activar tu cuenta de Coestudia, verifica tu correo con este enlace:</p>"
             f'<p><a href="{escape(link)}">Verificar mi correo</a></p>'
             "<p>El enlace vence en 24 horas. Si no creaste una cuenta, ignora este correo.</p>"
         ),
         text=(
-            f"Hola {first_name}:\n\nPara activar tu cuenta de Coestudia abre este enlace:\n"
+            f"Hola {first_name(name)}:\n\nPara activar tu cuenta de Coestudia abre este enlace:\n"
             f"{link}\n\nEl enlace vence en 24 horas."
+        ),
+    )
+
+
+def send_password_reset_email(to: str, name: str, token: str) -> None:
+    link = f"{frontend_url()}/?restablecer={token}"
+    send_email(
+        to,
+        "Recupera tu contraseña de Coestudia",
+        html=(
+            f"<p>Hola {escape(first_name(name))}:</p>"
+            "<p>Pediste cambiar tu contraseña de Coestudia. Elige una nueva con este enlace:</p>"
+            f'<p><a href="{escape(link)}">Cambiar mi contraseña</a></p>'
+            "<p>El enlace vence en 1 hora. Si no lo pediste, ignora este correo: tu contraseña "
+            "sigue siendo la misma.</p>"
+        ),
+        text=(
+            f"Hola {first_name(name)}:\n\nPara elegir una contraseña nueva abre este enlace:\n"
+            f"{link}\n\nEl enlace vence en 1 hora. Si no lo pediste, ignora este correo."
         ),
     )
