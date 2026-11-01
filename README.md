@@ -10,9 +10,22 @@ Requiere Python 3.12.
 python -m venv .venv
 source .venv/bin/activate        # En Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env             # opcional, solo si necesitas FRONTEND_URL
+alembic upgrade head             # crea las tablas (por defecto en SQLite, ./coestudia.db)
 uvicorn app.main:app --reload
 ```
+
+Para tener usuarios y grupos con los que probar, carga los datos de ejemplo (solo SQLite):
+
+```bash
+python -m app.seed               # entra con ana.rojas@uc.cl / Coestudia2026
+```
+
+Para usar variables locales (por ejemplo la API key de Brevo), crea un `.env` con solo las que
+necesites (ver `.env.example`) y arranca con `uvicorn app.main:app --reload --env-file .env`.
+No copies `DATABASE_URL` de ejemplo: si no la defines se usa SQLite.
+
+Para trabajar contra PostgreSQL en vez de SQLite, exporta `DATABASE_URL` antes de correr
+`alembic` y `uvicorn` (ver `.env.example`).
 
 - http://localhost:8000/health
 - http://localhost:8000/api/hello
@@ -23,6 +36,7 @@ uvicorn app.main:app --reload
 ```bash
 ruff check .
 pytest
+pytest --cov=app                 # con el porcentaje de cobertura por archivo
 ```
 
 Ambos se ejecutan automáticamente en GitHub Actions en cada pull request y en cada push a `main`.
@@ -32,10 +46,32 @@ Ambos se ejecutan automáticamente en GitHub Actions en cada pull request y en c
 ```
 app/
 ├── main.py          # instancia FastAPI, CORS y registro de routers
+├── db.py            # conexión a la base, sesión y dependencia get_db
+├── models.py        # modelo de datos (tablas SQLAlchemy)
+├── schemas.py       # entrada y salida de la API (Pydantic)
+├── security.py      # contraseñas, JWT, tokens de correo y current_user
+├── rate_limit.py    # límite de intentos fallidos de login
+├── mailer.py        # envío de correos (Brevo)
+├── universities.py  # universidad según el dominio del correo
+├── text.py          # normalizar siglas y nombres (sin tildes ni espacios)
+├── seed.py          # datos de ejemplo: python -m app.seed
 └── routers/
-    └── hello.py     # /health y /api/hello
+    ├── hello.py     # /health y /api/hello
+    ├── auth.py      # /api/auth: registro, verificación, login y /me
+    ├── perfil.py    # /api/perfil: editar el perfil y «mis asignaturas»
+    ├── asignaturas.py  # /api/asignaturas: catálogo para autocompletar siglas
+    ├── grupos.py    # /api/grupos: buscar, filtrar, detalle, crear, mis grupos y pedir unirse
+    └── solicitudes.py  # /api/solicitudes: mis solicitudes; aceptar o rechazar (el creador)
+migrations/          # migraciones de Alembic
 tests/
-└── test_hello.py
+├── conftest.py      # cliente de pruebas con base SQLite y bandeja de correos
+├── test_auth.py
+├── test_grupos.py
+├── test_solicitudes.py
+├── test_hello.py
+├── test_rate_limit.py
+├── test_seed.py
+└── test_models.py   # reglas del esquema y que las migraciones calcen con models.py
 .github/workflows/
 ├── ci.yml           # lint → test
 └── release.yml      # tag v* → release en GitHub → deploy a Render
@@ -43,11 +79,135 @@ tests/
 
 ## Variables de entorno
 
-| Variable       | Descripción                                                    |
-| -------------- | -------------------------------------------------------------- |
-| `FRONTEND_URL` | URL del frontend en producción; se agrega a los orígenes CORS. |
+| Variable       | Descripción                                                          |
+| -------------- | -------------------------------------------------------------------- |
+| `FRONTEND_URL` | URL del frontend en producción; se agrega a los orígenes CORS.       |
+| `DATABASE_URL` | Connection string de PostgreSQL (Neon). Sin ella se usa SQLite local. |
+| `JWT_SECRET`    | Clave para firmar las sesiones. Obligatoria en producción (Render).   |
+| `BREVO_API_KEY` | API key de Brevo. Sin ella los correos se muestran en la consola.    |
+| `MAIL_FROM`     | Remitente de los correos (debe estar validado en Brevo).             |
 
 `http://localhost:5173` (Vite) siempre está permitido.
+
+## Autenticación
+
+| Método y ruta                         | Qué hace                                                   |
+| ------------------------------------- | ---------------------------------------------------------- |
+| `POST /api/auth/registro`             | Crea la cuenta y envía el enlace de verificación (201)      |
+| `POST /api/auth/verificar`            | Verifica el correo con el token del enlace e inicia sesión |
+| `POST /api/auth/reenviar-verificacion`| Envía un enlace nuevo; los anteriores dejan de servir (202) |
+| `POST /api/auth/login`                | Devuelve el JWT (401 si falla, 403 si falta verificar)     |
+| `GET /api/auth/me`                    | Usuario de la sesión actual                                |
+
+Después de 5 intentos fallidos de login con el mismo correo y conexión en 15 minutos, `/login`
+responde 429 hasta que pasen los 15 minutos (`app/rate_limit.py`, en memoria). El reenvío del
+correo de verificación está limitado a 1 por minuto y 5 al día por cuenta.
+
+El enlace del correo apunta a `FRONTEND_URL/?verificar=<token>`. En local, sin `BREVO_API_KEY`,
+el enlace aparece en la consola del backend: cópialo en el navegador.
+
+Para proteger un endpoint, pide el usuario actual. Si no hay una sesión válida, responde 401:
+
+```python
+from fastapi import Depends
+
+from app.models import Usuario
+from app.security import current_user
+
+
+@router.get("/api/grupos/mios")
+def my_groups(user: Usuario = Depends(current_user)):
+    ...
+```
+
+En los tests, el fixture `client` de `tests/conftest.py` usa una base nueva y `outbox` guarda los
+correos en vez de enviarlos (ver `tests/test_auth.py`).
+
+## Grupos
+
+`GET /api/grupos` (requiere sesión) busca grupos de la universidad del usuario:
+
+| Parámetro   | Ejemplo               | Qué filtra                                                 |
+| ----------- | --------------------- | ---------------------------------------------------------- |
+| `q`         | `calculo`, `mat 1620` | Sigla o nombre de la asignatura, sin importar tildes       |
+| `es_online` | `true` / `false`      | Modalidad; sin el parámetro, cualquiera                    |
+| `dia`       | `dia=0&dia=2`         | Días (0 = lunes … 5 = sábado)                              |
+| `es_manana` | `true` / `false`      | Bloque; con `dia`, ambos deben calzar en un mismo horario  |
+
+Devuelve solo grupos no eliminados y vigentes (`vigente_hasta` desde hoy, hora de Chile), con los
+abiertos primero. No incluye `lugar` ni `enlace`: solo los ven los integrantes.
+
+`GET /api/grupos/{id}` (requiere sesión) devuelve el detalle: lo mismo que el buscador más
+`creador`, `integrantes` (nombre, carrera y si es el creador; sin correo) y `es_miembro`. `lugar` y
+`enlace` vienen solo si el usuario es integrante. Los grupos de otra universidad, eliminados o
+vencidos responden 404.
+
+`POST /api/grupos` (requiere sesión) crea un grupo en la universidad del usuario y responde 201 con
+el mismo formato del detalle. El creador queda como primer integrante.
+
+| Campo               | Ejemplo                                     | Regla                                   |
+| ------------------- | ------------------------------------------- | --------------------------------------- |
+| `sigla`             | `mat 1620`                                  | Se normaliza (`MAT1620`)                |
+| `nombre_asignatura` | `Cálculo II`                                | Solo si la sigla aún no existe          |
+| `descripcion`       | `Repaso para el certamen`                   | Opcional, hasta 280 caracteres          |
+| `es_online`         | `false`                                     |                                         |
+| `lugar` / `enlace`  | `Biblioteca` / `https://meet.google.com/…`  | Lugar si es presencial, enlace si online |
+| `cupo_maximo`       | `4`                                         | Entre 2 y 10, incluye al creador        |
+| `vigente_hasta`     | `2026-12-04`                                | Posterior a hoy                         |
+| `horarios`          | `[{"dia_semana": 1, "es_manana": false}]`   | Al menos uno; los repetidos se ignoran  |
+
+Si la sigla no existe y no viene `nombre_asignatura`, responde 404 para que el frontend pida el
+nombre (igual que en «mis asignaturas»).
+
+`GET /api/grupos/mios` (requiere sesión) devuelve `{creados, participo}`: los grupos vigentes donde
+el usuario es integrante, con `lugar`, `enlace` y `es_creador`. En los que creó vienen además las
+`solicitudes` pendientes (quién la envió, su carrera y el mensaje).
+
+### Solicitudes para unirse
+
+| Método y ruta                           | Quién        | Qué hace                                         |
+| --------------------------------------- | ------------ | ------------------------------------------------ |
+| `POST /api/grupos/{id}/solicitudes`     | Cualquiera   | Pide unirse; `{mensaje?}` opcional (201)         |
+| `DELETE /api/grupos/{id}/solicitudes`   | Quien la pidió | Cancela su solicitud pendiente                 |
+| `GET /api/solicitudes/mias`             | Quien las envió | «Mis solicitudes»: pendientes, aceptadas y rechazadas |
+| `POST /api/solicitudes/{id}/aceptar`    | Creador      | Suma al integrante; si se llena el cupo, cierra el grupo |
+| `POST /api/solicitudes/{id}/rechazar`   | Creador      | La rechaza                                       |
+
+No se puede pedir unirse a un grupo del que ya eres integrante, cerrado, sin cupo o con otra
+solicitud pendiente tuya (409). Pedir y cancelar devuelven el detalle del grupo, con
+`solicitud_pendiente`; aceptar y rechazar devuelven el grupo como en «mis grupos». «Mis
+solicitudes» trae solo las de grupos vigentes, las más recientes primero y sin las canceladas; el
+grupo viene como en el buscador, sin lugar ni enlace. A quien no es el
+creador, las rutas de `/api/solicitudes` le responden 404.
+
+`app/text.py` tiene `normalize_code()` para guardar las siglas igual que se buscan (B05).
+
+## Perfil y mis asignaturas
+
+Todas requieren sesión.
+
+| Método y ruta                         | Qué hace                                                    |
+| ------------------------------------- | ----------------------------------------------------------- |
+| `PUT /api/perfil`                     | Cambia `nombre`, `carrera` y `anio_ingreso` (no el correo)  |
+| `GET /api/perfil/asignaturas`         | Asignaturas del usuario, ordenadas por sigla                |
+| `POST /api/perfil/asignaturas`        | Agrega `{sigla, nombre?}`; si la sigla no existe, la crea (201) |
+| `DELETE /api/perfil/asignaturas/{id}` | La quita de la lista del usuario, no del catálogo (204)     |
+| `GET /api/asignaturas`                | Catálogo de asignaturas de la universidad del usuario       |
+
+`POST /api/perfil/asignaturas` busca la sigla normalizada (`mat 1620` → `MAT1620`) en la
+universidad del usuario. Si no existe y no viene `nombre`, responde 404 para que el frontend pida
+el nombre. Agregar una que ya está en la lista no es error. Máximo 10 asignaturas por usuario.
+
+## Base de datos y migraciones
+
+El esquema vive en `app/models.py` y se aplica con migraciones de Alembic. Si cambias un modelo:
+
+```bash
+alembic revision --autogenerate -m "describe el cambio"   # revisa el archivo generado
+alembic upgrade head
+```
+
+El test `test_migrations_match_models` falla si `models.py` cambia sin su migración.
 
 ## Flujo de ramas
 

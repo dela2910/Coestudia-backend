@@ -37,6 +37,10 @@ jobs:
     name: Test
     needs: lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Para comentar la cobertura en el PR
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,5 +54,41 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
-      - name: Pytest
-        run: pytest
+      - name: Pytest con cobertura
+        run: pytest --cov=app --cov-report=term-missing
+
+      - name: Resumen de cobertura
+        run: |
+          {
+            echo "<!-- cobertura-backend -->"
+            echo "### Cobertura de tests (backend): $(coverage report --format=total)%"
+            echo
+            echo "<details><summary>Detalle por archivo</summary>"
+            echo
+            coverage report --format=markdown
+            echo
+            echo "</details>"
+          } > cobertura.md
+          cat cobertura.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comentar cobertura en el PR
+        if: github.event_name == 'pull_request'
+        # Si no se puede comentar (ej. PR desde un fork), el CI no falla por eso
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = require("fs").readFileSync("cobertura.md", "utf8");
+            const marker = "<!-- cobertura-backend -->";
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            // Se actualiza el mismo comentario en cada push, en vez de agregar uno nuevo
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
+            });
+            const previous = comments.find((c) => c.body.startsWith(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
