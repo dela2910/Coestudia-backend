@@ -41,6 +41,14 @@ pytest --cov=app                 # con el porcentaje de cobertura por archivo
 
 Ambos se ejecutan automáticamente en GitHub Actions en cada pull request y en cada push a `main`.
 
+Además, el CI analiza:
+
+- **Dependencias (Trivy)**: busca vulnerabilidades conocidas en las dependencias. Falla si hay
+  alguna alta o crítica que ya tenga versión corregida; el detalle queda en el resumen del job.
+- **Calidad (SonarQube)**: analiza el código y la cobertura en SonarQube Cloud
+  (`sonar-project.properties`) y falla si no se cumple el quality gate. Necesita el secret
+  `SONAR_TOKEN`; sin él, el paso se omite con un aviso.
+
 ## Estructura
 
 ```
@@ -73,7 +81,7 @@ tests/
 ├── test_seed.py
 └── test_models.py   # reglas del esquema y que las migraciones calcen con models.py
 .github/workflows/
-├── ci.yml           # lint → test
+├── ci.yml           # lint → test → SonarQube, y Trivy (dependencias)
 └── release.yml      # tag v* → release en GitHub → deploy a Render
 ```
 
