@@ -55,7 +55,15 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Pytest con cobertura
-        run: pytest --cov=app --cov-report=term-missing
+        # coverage.xml lo usa el job de SonarQube
+        run: pytest --cov=app --cov-report=term-missing --cov-report=xml
+
+      - name: Guardar reporte de cobertura
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobertura-backend
+          path: coverage.xml
+          retention-days: 7
 
       - name: Resumen de cobertura
         run: |
@@ -92,3 +100,82 @@ jobs:
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
+
+  dependencies:
+    name: Dependencias (Trivy)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # requirements.txt usa rangos (fastapi>=0.110) y Trivy solo reconoce versiones exactas:
+      # se instalan las dependencias y se analiza la lista con las versiones que quedaron
+      - name: Resolver versiones exactas
+        run: |
+          pip install -r requirements.txt
+          mkdir -p trivy-scan
+          pip freeze > trivy-scan/requirements.txt
+
+      # Falla si hay vulnerabilidades altas o críticas que ya tienen versión corregida
+      - name: Analizar dependencias con Trivy
+        # Fijado a un commit (v0.36.0): un tag se puede mover, un commit no
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          scan-type: fs
+          scan-ref: trivy-scan
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          output: trivy.txt
+
+      - name: Resumen de Trivy
+        if: always()
+        run: |
+          {
+            echo "### Análisis de dependencias (Trivy): vulnerabilidades altas y críticas"
+            echo
+            echo '```'
+            cat trivy.txt 2>/dev/null || echo "Trivy no generó reporte (revisa el paso anterior)."
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  sonarqube:
+    name: Calidad (SonarQube)
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # SonarQube necesita el historial completo para saber qué código es nuevo
+          fetch-depth: 0
+
+      - name: Traer reporte de cobertura
+        uses: actions/download-artifact@v4
+        with:
+          name: cobertura-backend
+
+      - name: Avisar si falta SONAR_TOKEN
+        if: env.SONAR_TOKEN == ''
+        run: echo "::warning::Falta el secret SONAR_TOKEN; se omite el análisis de SonarQube."
+
+      # Analiza con SonarQube Cloud (sonar-project.properties) y espera el quality gate:
+      # el job falla si el código no lo cumple
+      - name: Analizar con SonarQube
+        if: env.SONAR_TOKEN != ''
+        # Fijado a un commit (v8.4.0): un tag se puede mover, un commit no
+        uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304
+        with:
+          args: >
+            -Dsonar.qualitygate.wait=true
