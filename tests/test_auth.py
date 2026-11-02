@@ -143,7 +143,19 @@ def test_verification_token_is_single_use(client, outbox):
     register(client)
     token = outbox[0][2]
     assert client.post("/api/auth/verificar", json={"token": token}).status_code == 200
-    assert client.post("/api/auth/verificar", json={"token": token}).status_code == 400
+    # Abrir el enlace otra vez no entrega otra sesión, pero avisa que la cuenta ya está activa
+    response = client.post("/api/auth/verificar", json={"token": token})
+    assert response.status_code == 409
+    assert "ya está verificado" in response.json()["detail"]
+    assert "access_token" not in response.json()
+
+
+def test_replaced_link_of_unverified_account_is_invalid(client, outbox, session_factory):
+    # Un enlace anulado por un reenvío sigue siendo inválido mientras la cuenta no se verifique
+    register(client)
+    make_tokens_older(session_factory, minutes=2)
+    client.post("/api/auth/reenviar-verificacion", json={"email": NEW_USER["email"]})
+    assert client.post("/api/auth/verificar", json={"token": outbox[0][2]}).status_code == 400
 
 
 def test_verification_token_expires(client, outbox, session_factory):
