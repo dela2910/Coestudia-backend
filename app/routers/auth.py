@@ -45,6 +45,7 @@ logger = logging.getLogger("coestudia.auth")
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 INVALID_LINK = "El enlace de verificación no es válido o ya expiró. Pide uno nuevo."
+ALREADY_VERIFIED = "Tu correo ya está verificado. Inicia sesión con tu correo y contraseña."
 INVALID_RESET_LINK = (
     "El enlace para cambiar la contraseña no es válido o ya expiró. Pide uno nuevo."
 )
@@ -166,10 +167,14 @@ def verify_email(data: TokenIn, db: Session = Depends(get_db)):
         )
     )
     now = now_utc()
-    if record is None or record.usado_en is not None or as_utc(record.expira_en) < now:
+    if record is None or record.usuario.eliminado_en is not None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_LINK)
     user = record.usuario
-    if user.eliminado_en is not None:
+    if record.usado_en is not None or as_utc(record.expira_en) < now:
+        # El enlace se abrió dos veces (o lo abrió antes el antivirus del correo): si la cuenta
+        # ya quedó verificada no es un error, pero tampoco se entrega otra sesión con él
+        if user.email_verificado_en is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, ALREADY_VERIFIED)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_LINK)
 
     record.usado_en = now
