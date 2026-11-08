@@ -10,6 +10,10 @@ from functools import lru_cache
 from pathlib import Path
 
 
+class MissingFileError(Exception):
+    """El archivo no está en el almacenamiento (por ejemplo, se perdió en un deploy sin B2)."""
+
+
 class LocalStorage:
     def __init__(self, root: Path):
         self.root = root
@@ -27,7 +31,10 @@ class LocalStorage:
         path.write_bytes(data)
 
     def read(self, key: str) -> bytes:
-        return self._path(key).read_bytes()
+        try:
+            return self._path(key).read_bytes()
+        except FileNotFoundError as error:
+            raise MissingFileError(key) from error
 
     def delete(self, key: str) -> None:
         self._path(key).unlink(missing_ok=True)
@@ -49,7 +56,10 @@ class B2Storage:
         self.client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
 
     def read(self, key: str) -> bytes:
-        return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+        try:
+            return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+        except self.client.exceptions.NoSuchKey as error:
+            raise MissingFileError(key) from error
 
     def delete(self, key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=key)
