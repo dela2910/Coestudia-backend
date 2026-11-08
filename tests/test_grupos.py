@@ -98,6 +98,35 @@ def test_lists_visible_groups_open_first(client, auth, data):
     ]
 
 
+def test_full_groups_go_after_groups_with_spots(client, auth, data, session_factory):
+    with session_factory() as db:
+        full = db.get(GrupoEstudio, data["calculo_presencial"])
+        full.cupo_maximo = 2
+        full.miembros.append(
+            MiembroGrupo(
+                usuario=Usuario(
+                    email="beto@uc.cl",
+                    password_hash="x",
+                    nombre="Beto",
+                    universidad=UC,
+                    terminos_aceptados_en=now_utc(),
+                )
+            )
+        )
+        db.commit()
+
+    results = search(client, auth)
+
+    # Lleno pero abierto: va después de los que tienen cupo, igual que los cerrados
+    assert ids(results) == [
+        data["calculo_online"],
+        data["fisica"],
+        data["calculo_presencial"],
+        data["calculo_cerrado"],
+    ]
+    assert results[2]["abierto"] is True
+
+
 def test_hides_expired_deleted_and_other_universities(client, auth, data):
     found = set(ids(search(client, auth)))
     assert data["vencido"] not in found
