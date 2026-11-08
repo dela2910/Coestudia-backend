@@ -60,6 +60,7 @@ app/
 ├── security.py      # contraseñas, JWT, tokens de correo y current_user
 ├── rate_limit.py    # límite de intentos fallidos de login
 ├── mailer.py        # envío de correos (Brevo)
+├── storage.py       # dónde se guardan los archivos (Backblaze B2 o carpeta local)
 ├── universities.py  # universidad según el dominio del correo
 ├── text.py          # normalizar siglas y nombres (sin tildes ni espacios)
 ├── seed.py          # datos de ejemplo: python -m app.seed
@@ -69,7 +70,8 @@ app/
     ├── perfil.py    # /api/perfil: editar el perfil y «mis asignaturas»
     ├── asignaturas.py  # /api/asignaturas: catálogo para autocompletar siglas
     ├── grupos.py    # /api/grupos: buscar, detalle, crear, mis grupos, pedir unirse, administrar y abandonar
-    └── solicitudes.py  # /api/solicitudes: mis solicitudes; aceptar o rechazar (el creador)
+    ├── solicitudes.py  # /api/solicitudes: mis solicitudes; aceptar o rechazar (el creador)
+    └── archivos.py  # archivos del grupo: subir, listar, descargar y eliminar
 migrations/          # migraciones de Alembic
 tests/
 ├── conftest.py      # cliente de pruebas con base SQLite y bandeja de correos
@@ -77,6 +79,7 @@ tests/
 ├── test_grupos.py
 ├── test_solicitudes.py
 ├── test_administrar.py
+├── test_archivos.py
 ├── test_hello.py
 ├── test_rate_limit.py
 ├── test_seed.py
@@ -95,6 +98,9 @@ tests/
 | `JWT_SECRET`    | Clave para firmar las sesiones. Obligatoria en producción (Render).   |
 | `BREVO_API_KEY` | API key de Brevo. Sin ella los correos se muestran en la consola.    |
 | `MAIL_FROM`     | Remitente de los correos (debe estar validado en Brevo).             |
+| `B2_BUCKET`     | Bucket de Backblaze B2 para los archivos. Sin él se usa `UPLOADS_DIR`. |
+| `B2_ENDPOINT`, `B2_KEY_ID`, `B2_APPLICATION_KEY` | Endpoint S3 y application key de B2.   |
+| `UPLOADS_DIR`   | Carpeta local para los archivos en desarrollo (por defecto `uploads`). |
 
 `http://localhost:5173` (Vite) siempre está permitido.
 
@@ -211,6 +217,27 @@ A quien no es el creador, las rutas de administrar le responden 403. El creador 
 expulsarse ni abandonar (409): para dejar el grupo, lo elimina.
 
 `app/text.py` tiene `normalize_code()` para guardar las siglas igual que se buscan (B05).
+
+### Archivos del grupo
+
+Solo los integrantes del grupo. Todas requieren sesión.
+
+| Método y ruta                         | Qué hace                                                       |
+| ------------------------------------- | -------------------------------------------------------------- |
+| `GET /api/grupos/{id}/archivos`       | Archivos del grupo, los más recientes primero                  |
+| `POST /api/grupos/{id}/archivos`      | Sube un archivo (`multipart/form-data`, campo `archivo`) (201) |
+| `GET /api/archivos/{id}/descarga`     | Descarga el archivo (siempre como adjunto)                     |
+| `DELETE /api/archivos/{id}`           | Lo elimina quien lo subió o el creador del grupo (204)         |
+
+Hasta 10 MB por archivo (413) y 100 por grupo (409). Se aceptan PDF, Word, PowerPoint, Excel,
+OpenDocument, texto (`txt`, `md`, `csv`) e imágenes; otros tipos responden 422. El tipo MIME se
+deduce de la extensión. De los archivos de texto se guarda `texto_extraido` para el asistente.
+A quien no es integrante, listar y subir le responden 403, y descargar o eliminar, 404.
+
+Los archivos se guardan en Backblaze B2 si está definida `B2_BUCKET` (el disco de Render se borra
+en cada deploy); si no, en la carpeta `UPLOADS_DIR`. Para configurar B2: crear un bucket
+**privado**, una application key con acceso a ese bucket, y definir las cuatro variables `B2_*`
+en Render (el endpoint aparece en el detalle del bucket, ej. `https://s3.us-west-004.backblazeb2.com`).
 
 ## Perfil y mis asignaturas
 

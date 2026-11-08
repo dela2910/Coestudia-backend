@@ -3,7 +3,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import asignaturas, auth, grupos, hello, perfil, solicitudes
+from app.routers import archivos, asignaturas, auth, grupos, hello, perfil, solicitudes
 
 app = FastAPI(title="Coestudia API", version="0.1.0")
 
@@ -27,3 +27,4 @@ app.include_router(grupos.router)
 app.include_router(perfil.router)
 app.include_router(asignaturas.router)
 app.include_router(solicitudes.router)
+app.include_router(archivos.router)
