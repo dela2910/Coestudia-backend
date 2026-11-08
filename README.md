@@ -207,8 +207,15 @@ Solo los integrantes del grupo. Todas requieren sesión.
 | `GET /api/archivos/{id}/descarga`     | Descarga el archivo (siempre como adjunto)                     |
 | `DELETE /api/archivos/{id}`           | Lo elimina quien lo subió o el creador del grupo (204)         |
 
-Hasta 10 MB por archivo (413) y 100 por grupo (409). Se aceptan PDF, Word, PowerPoint, Excel,
-OpenDocument, texto (`txt`, `md`, `csv`) e imágenes; otros tipos responden 422. El tipo MIME se
+Hasta 10 MB por archivo (413) y 100 por grupo (409). Extensiones aceptadas (otras responden 422):
+
+- Documentos: `pdf`, `doc`, `docx`, `odt`, `rtf`
+- Presentaciones: `ppt`, `pptx`, `odp`
+- Planillas: `xls`, `xlsx`, `ods`, `csv`
+- Texto: `txt`, `md`
+- Imágenes: `png`, `jpg`, `jpeg`, `gif`, `webp`, `heic`
+
+ El tipo MIME se
 deduce de la extensión. De los archivos de texto se guarda `texto_extraido` para el asistente.
 A quien no es integrante, listar y subir le responden 403, y descargar o eliminar, 404.
 
