@@ -15,7 +15,7 @@ from app.models import Archivo, GrupoEstudio, Usuario
 from app.routers.grupos import is_active, visible_group
 from app.schemas import ArchivoOut
 from app.security import current_user
-from app.storage import get_storage
+from app.storage import MissingFileError, get_storage
 
 logger = logging.getLogger("coestudia.archivos")
 
@@ -152,8 +152,17 @@ def download_file(
 ):
     """Contenido del archivo. Pasa por la API para revisar que el usuario sea integrante."""
     file = member_file(db, archivo_id, user)
+    try:
+        content = storage.read(file.clave_almacenamiento)
+    except MissingFileError:
+        logger.error("Falta %s en el almacenamiento", file.clave_almacenamiento)
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "No encontramos el contenido de este archivo. Pídele a quien lo subió que lo suba "
+            "de nuevo.",
+        )
     return Response(
-        content=storage.read(file.clave_almacenamiento),
+        content=content,
         media_type=file.tipo_mime,
         headers={
             # Siempre como descarga, nunca abierto en el dominio de la API

@@ -8,7 +8,8 @@ PyJWT>=2.8
 email-validator>=2.1
 httpx>=0.27
 # Subir archivos (multipart/form-data) y guardarlos en Backblaze B2
-python-multipart>=0.0.9
+# 0.0.30 corrige vulnerabilidades altas (DoS y escritura de archivos)
+python-multipart>=0.0.30
 boto3>=1.34
 
 # Desarrollo

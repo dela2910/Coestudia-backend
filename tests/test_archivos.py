@@ -167,6 +167,17 @@ def test_member_downloads_the_file(client, users, group):
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
+def test_download_of_a_file_missing_in_storage_is_404(client, users, group, storage):
+    file_id = upload(client, users["ana"], group).json()["id"]
+    for path in storage.root.rglob("*.pdf"):
+        path.unlink()
+
+    response = client.get(f"/api/archivos/{file_id}/descarga", headers=users["ana"])
+
+    assert response.status_code == 404
+    assert "suba de nuevo" in response.json()["detail"]
+
+
 def test_non_members_cannot_download(client, users, group):
     file_id = upload(client, users["ana"], group).json()["id"]
 
