@@ -86,6 +86,14 @@ def test_text_files_save_their_text_for_the_assistant(client, users, group, sess
     assert texts == {"resumen.md": "# Series\nConvergen", "guia.pdf": None}
 
 
+def test_text_without_nul_characters(client, users, group, session_factory):
+    # Un .txt en UTF-16 trae NUL entre las letras: PostgreSQL no los acepta en un texto
+    upload(client, users["ana"], group, name="notas.txt", content="hola".encode("utf-16-le"))
+
+    with session_factory() as db:
+        assert db.query(Archivo).one().texto_extraido == "hola"
+
+
 @pytest.mark.parametrize("name", ["pagina.html", "dibujo.svg", "script.exe", "sin_extension"])
 def test_rejects_file_types_not_allowed(client, users, group, name):
     response = upload(client, users["ana"], group, name=name)

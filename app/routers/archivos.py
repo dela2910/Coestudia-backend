@@ -130,7 +130,12 @@ def upload_file(
         tipo_mime=mime,
         tamano_bytes=len(data),
         clave_almacenamiento=key,
-        texto_extraido=data.decode("utf-8", errors="replace") if ext in TEXT_EXTENSIONS else None,
+        # PostgreSQL no acepta el carácter NUL en un texto (los archivos en UTF-16 lo traen)
+        texto_extraido=(
+            data.decode("utf-8", errors="replace").replace("\x00", "")
+            if ext in TEXT_EXTENSIONS
+            else None
+        ),
     )
     db.add(file)
     try:
