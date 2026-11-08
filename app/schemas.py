@@ -171,6 +171,22 @@ class GrupoIn(BaseModel):
     horarios: list[HorarioIn] = Field(min_length=1, max_length=12)
 
 
+class GrupoEditIn(BaseModel):
+    """Datos que el creador puede cambiar. La asignatura no se edita."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    descripcion: str | None = Field(default=None, max_length=280)
+    es_online: bool
+    lugar: str | None = Field(default=None, max_length=200)
+    enlace: str | None = Field(default=None, max_length=500)
+    cupo_maximo: int = Field(ge=2, le=10)
+    vigente_hasta: date
+    horarios: list[HorarioIn] = Field(min_length=1, max_length=12)
+    # false = cerrado: no recibe solicitudes nuevas
+    abierto: bool
+
+
 class GrupoResumenOut(BaseModel):
     """Grupo en los resultados del buscador. No incluye lugar ni enlace: solo los ven los
     integrantes (RNF de privacidad)."""
@@ -203,6 +219,8 @@ class GrupoDetalleOut(GrupoResumenOut):
     es_miembro: bool
     # El usuario ya pidió unirse y el creador aún no responde
     solicitud_pendiente: bool
+    # La solicitud espera a que se libere un cupo
+    solicitud_en_espera: bool
     lugar: str | None
     enlace: str | None
 
@@ -226,6 +244,8 @@ class SolicitanteOut(BaseModel):
 class SolicitudOut(BaseModel):
     id: int
     usuario: SolicitanteOut
+    # pendiente | en_espera (el grupo está lleno)
+    estado: str
     mensaje: str | None
     creada_en: datetime
 

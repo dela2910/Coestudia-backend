@@ -69,7 +69,7 @@ app/
     ├── auth.py      # /api/auth: registro, verificación, login y /me
     ├── perfil.py    # /api/perfil: editar el perfil y «mis asignaturas»
     ├── asignaturas.py  # /api/asignaturas: catálogo para autocompletar siglas
-    ├── grupos.py    # /api/grupos: buscar, filtrar, detalle, crear, mis grupos y pedir unirse
+    ├── grupos.py    # /api/grupos: buscar, detalle, crear, mis grupos, pedir unirse, administrar y abandonar
     ├── solicitudes.py  # /api/solicitudes: mis solicitudes; aceptar o rechazar (el creador)
     └── archivos.py  # archivos del grupo: subir, listar, descargar y eliminar
 migrations/          # migraciones de Alembic
@@ -78,6 +78,7 @@ tests/
 ├── test_auth.py
 ├── test_grupos.py
 ├── test_solicitudes.py
+├── test_administrar.py
 ├── test_archivos.py
 ├── test_hello.py
 ├── test_rate_limit.py
@@ -149,7 +150,8 @@ correos en vez de enviarlos (ver `tests/test_auth.py`).
 | `es_manana` | `true` / `false`      | Bloque; con `dia`, ambos deben calzar en un mismo horario  |
 
 Devuelve solo grupos no eliminados y vigentes (`vigente_hasta` desde hoy, hora de Chile), con los
-abiertos primero. No incluye `lugar` ni `enlace`: solo los ven los integrantes.
+abiertos y con cupo primero. `abierto` es solo la decisión del creador: un grupo lleno sigue abierto
+y las solicitudes nuevas quedan en espera. No incluye `lugar` ni `enlace`: solo los ven los integrantes.
 
 `GET /api/grupos/{id}` (requiere sesión) devuelve el detalle: lo mismo que el buscador más
 `creador`, `integrantes` (nombre, carrera y si es el creador; sin correo) y `es_miembro`. `lugar` y
@@ -183,16 +185,36 @@ el usuario es integrante, con `lugar`, `enlace` y `es_creador`. En los que creó
 | --------------------------------------- | ------------ | ------------------------------------------------ |
 | `POST /api/grupos/{id}/solicitudes`     | Cualquiera   | Pide unirse; `{mensaje?}` opcional (201)         |
 | `DELETE /api/grupos/{id}/solicitudes`   | Quien la pidió | Cancela su solicitud pendiente                 |
-| `GET /api/solicitudes/mias`             | Quien las envió | «Mis solicitudes»: pendientes, aceptadas y rechazadas |
-| `POST /api/solicitudes/{id}/aceptar`    | Creador      | Suma al integrante; si se llena el cupo, cierra el grupo |
+| `GET /api/solicitudes/mias`             | Quien las envió | «Mis solicitudes»: pendientes, en espera, aceptadas y rechazadas |
+| `POST /api/solicitudes/{id}/aceptar`    | Creador      | Suma al integrante; si se llena el cupo, las demás quedan `en_espera` |
 | `POST /api/solicitudes/{id}/rechazar`   | Creador      | La rechaza                                       |
 
-No se puede pedir unirse a un grupo del que ya eres integrante, cerrado, sin cupo o con otra
-solicitud pendiente tuya (409). Pedir y cancelar devuelven el detalle del grupo, con
+No se puede pedir unirse a un grupo del que ya eres integrante, cerrado o con otra solicitud
+activa tuya (409).
+
+**Lista de espera.** Si el grupo está lleno, la solicitud se crea con estado `en_espera` (el
+detalle trae `solicitud_en_espera: true`). Cuando el creador acepta la que completa el cupo, las
+demás pendientes pasan a `en_espera`. Cuando se libera un cupo (alguien abandona, el creador lo
+expulsa o sube el cupo), las que estaban en espera vuelven a `pendiente`. Las en espera se pueden
+rechazar o cancelar, pero no aceptar (409). En «mis grupos» cada solicitud trae su `estado`. Pedir y cancelar devuelven el detalle del grupo, con
 `solicitud_pendiente`; aceptar y rechazar devuelven el grupo como en «mis grupos». «Mis
 solicitudes» trae solo las de grupos vigentes, las más recientes primero y sin las canceladas; el
 grupo viene como en el buscador, sin lugar ni enlace. A quien no es el
 creador, las rutas de `/api/solicitudes` le responden 404.
+
+### Administrar y abandonar
+
+| Método y ruta                                | Quién       | Qué hace                                       |
+| -------------------------------------------- | ----------- | ---------------------------------------------- |
+| `PUT /api/grupos/{id}`                       | Creador     | Edita los datos y `abierto` (cerrar o reabrir) |
+| `DELETE /api/grupos/{id}`                    | Creador     | Elimina el grupo (lógico) (204)                |
+| `DELETE /api/grupos/{id}/integrantes/{usuario}` | Creador  | Expulsa a un integrante                        |
+| `POST /api/grupos/{id}/abandonar`            | Integrante  | Deja el grupo (204)                            |
+
+`PUT` recibe lo mismo que crear, sin `sigla` ni `nombre_asignatura`, más `abierto`; el cupo no
+puede quedar bajo los integrantes actuales (422). Editar y expulsar devuelven el detalle del grupo.
+A quien no es el creador, las rutas de administrar le responden 403. El creador no puede
+expulsarse ni abandonar (409): para dejar el grupo, lo elimina.
 
 `app/text.py` tiene `normalize_code()` para guardar las siglas igual que se buscan (B05).
 
