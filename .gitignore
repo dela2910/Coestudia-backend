@@ -221,3 +221,4 @@ __marimo__/
 # Documentación personal (no se sube al repo)
 *.md
 !README.md
+uploads/
