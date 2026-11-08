@@ -185,8 +185,8 @@ el usuario es integrante, con `lugar`, `enlace` y `es_creador`. En los que creó
 | --------------------------------------- | ------------ | ------------------------------------------------ |
 | `POST /api/grupos/{id}/solicitudes`     | Cualquiera   | Pide unirse; `{mensaje?}` opcional (201)         |
 | `DELETE /api/grupos/{id}/solicitudes`   | Quien la pidió | Cancela su solicitud pendiente                 |
-| `GET /api/solicitudes/mias`             | Quien las envió | «Mis solicitudes»: pendientes, aceptadas y rechazadas |
-| `POST /api/solicitudes/{id}/aceptar`    | Creador      | Suma al integrante; si se llena el cupo, cierra el grupo |
+| `GET /api/solicitudes/mias`             | Quien las envió | «Mis solicitudes»: pendientes, en espera, aceptadas y rechazadas |
+| `POST /api/solicitudes/{id}/aceptar`    | Creador      | Suma al integrante; si se llena el cupo, las demás quedan `en_espera` |
 | `POST /api/solicitudes/{id}/rechazar`   | Creador      | La rechaza                                       |
 
 No se puede pedir unirse a un grupo del que ya eres integrante, cerrado o con otra solicitud
