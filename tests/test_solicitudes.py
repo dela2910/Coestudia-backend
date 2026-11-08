@@ -2,36 +2,7 @@ from datetime import timedelta
 
 import pytest
 
-from app.models import GrupoEstudio, Solicitud, Usuario, now_utc, today_in_chile
-from app.security import hash_password
-
-PASSWORD = "Clave-segura-1"
-UC = "Pontificia Universidad Católica de Chile"
-
-
-@pytest.fixture
-def users(client, session_factory):
-    """Crea usuarios UC verificados y devuelve los headers de sesión de cada uno por nombre."""
-    names = {"ana": "Ana Rojas", "luis": "Luis Castro", "sofia": "Sofía Pérez", "otro": "Otro"}
-    with session_factory() as db:
-        for key, name in names.items():
-            db.add(
-                Usuario(
-                    email=f"{key}@uc.cl",
-                    password_hash=hash_password(PASSWORD),
-                    nombre=name,
-                    carrera="Ingeniería Civil",
-                    universidad=UC,
-                    terminos_aceptados_en=now_utc(),
-                    email_verificado_en=now_utc(),
-                )
-            )
-        db.commit()
-    headers = {}
-    for key in names:
-        login = client.post("/api/auth/login", json={"email": f"{key}@uc.cl", "password": PASSWORD})
-        headers[key] = {"Authorization": f"Bearer {login.json()['access_token']}"}
-    return headers
+from app.models import GrupoEstudio, Solicitud, today_in_chile
 
 
 def create_group(client, auth, **fields):

@@ -255,3 +255,17 @@ class MiSolicitudOut(BaseModel):
 class MisGruposOut(BaseModel):
     creados: list[GrupoMioOut]
     participo: list[GrupoMioOut]
+
+
+class ArchivoOut(BaseModel):
+    """Archivo compartido en el grupo. Se descarga con GET /api/archivos/{id}/descarga."""
+
+    id: int
+    nombre: str
+    tipo_mime: str
+    tamano_bytes: int
+    # Nombre de quien lo subió
+    subido_por: str
+    creado_en: datetime
+    # Lo subió el usuario o es el creador del grupo
+    puede_eliminar: bool
