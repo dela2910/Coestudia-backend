@@ -86,12 +86,32 @@ def test_text_files_save_their_text_for_the_assistant(client, users, group, sess
     assert texts == {"resumen.md": "# Series\nConvergen", "guia.pdf": None}
 
 
-def test_text_without_nul_characters(client, users, group, session_factory):
-    # Un .txt en UTF-16 trae NUL entre las letras: PostgreSQL no los acepta en un texto
-    upload(client, users["ana"], group, name="notas.txt", content="hola".encode("utf-16-le"))
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Repaso mañana".encode("utf-8"),
+        "Repaso mañana".encode("utf-8-sig"),
+        # Con BOM, como lo guarda Excel («texto Unicode»)
+        "Repaso mañana".encode("utf-16"),
+        "Repaso mañana".encode("utf-16-le"),
+        "Repaso mañana".encode("utf-16-be"),
+    ],
+)
+def test_text_files_in_utf8_or_utf16_keep_their_text(
+    client, users, group, session_factory, content
+):
+    upload(client, users["ana"], group, name="notas.txt", content=content)
 
     with session_factory() as db:
-        assert db.query(Archivo).one().texto_extraido == "hola"
+        assert db.query(Archivo).one().texto_extraido == "Repaso mañana"
+
+
+def test_extracted_text_has_no_nul_characters(client, users, group, session_factory):
+    # PostgreSQL no acepta NUL en un texto
+    upload(client, users["ana"], group, name="datos.csv", content=b"a,b\x00,c")
+
+    with session_factory() as db:
+        assert db.query(Archivo).one().texto_extraido == "a,b,c"
 
 
 @pytest.mark.parametrize("name", ["pagina.html", "dibujo.svg", "script.exe", "sin_extension"])
