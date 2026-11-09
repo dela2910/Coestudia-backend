@@ -196,6 +196,9 @@ class GrupoEstudio(Base):
     mensajes: Mapped[list["MensajeAsistente"]] = relationship(
         back_populates="grupo", cascade="all, delete-orphan"
     )
+    temas_foro: Mapped[list["TemaForo"]] = relationship(
+        back_populates="grupo", cascade="all, delete-orphan"
+    )
 
 
 class HorarioGrupo(Base):
@@ -301,6 +304,44 @@ class Archivo(Base):
 
     grupo: Mapped[GrupoEstudio] = relationship(back_populates="archivos")
     subido_por: Mapped[Usuario] = relationship()
+
+
+class TemaForo(Base):
+    """Tema del foro del grupo (B16), por ejemplo «Guía 2 – Ejercicio 3». Las respuestas quedan
+    debajo, en orden."""
+
+    __tablename__ = "tema_foro"
+    # La lista del foro se ordena por la última actividad del grupo
+    __table_args__ = (Index("ix_tema_foro_grupo", "grupo_id", "ultima_actividad_en"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    grupo_id: Mapped[int] = mapped_column(ForeignKey("grupo_estudio.id", ondelete="CASCADE"))
+    autor_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"))
+    titulo: Mapped[str] = mapped_column(String(150))
+    contenido: Mapped[str] = mapped_column(Text)
+    creado_en: Mapped[datetime] = created_at()
+    # Fecha de la última respuesta (o de la creación si no tiene)
+    ultima_actividad_en: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=now_utc)
+
+    grupo: Mapped[GrupoEstudio] = relationship(back_populates="temas_foro")
+    autor: Mapped[Usuario] = relationship()
+    respuestas: Mapped[list["RespuestaForo"]] = relationship(
+        back_populates="tema", cascade="all, delete-orphan", order_by="RespuestaForo.id"
+    )
+
+
+class RespuestaForo(Base):
+    __tablename__ = "respuesta_foro"
+    __table_args__ = (Index("ix_respuesta_foro_tema", "tema_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tema_id: Mapped[int] = mapped_column(ForeignKey("tema_foro.id", ondelete="CASCADE"))
+    autor_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"))
+    contenido: Mapped[str] = mapped_column(Text)
+    creado_en: Mapped[datetime] = created_at()
+
+    tema: Mapped[TemaForo] = relationship(back_populates="respuestas")
+    autor: Mapped[Usuario] = relationship()
 
 
 class MensajeAsistente(Base):
