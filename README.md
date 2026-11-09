@@ -71,7 +71,8 @@ app/
     ├── asignaturas.py  # /api/asignaturas: catálogo para autocompletar siglas
     ├── grupos.py    # /api/grupos: buscar, detalle, crear, mis grupos, pedir unirse, administrar y abandonar
     ├── solicitudes.py  # /api/solicitudes: mis solicitudes; aceptar o rechazar (el creador)
-    └── archivos.py  # archivos del grupo: subir, listar, descargar y eliminar
+    ├── archivos.py  # archivos del grupo: subir, listar, descargar y eliminar
+    └── foro.py      # foro del grupo: temas y respuestas
 migrations/          # migraciones de Alembic
 tests/
 ├── conftest.py      # cliente de pruebas con base SQLite y bandeja de correos
@@ -80,6 +81,7 @@ tests/
 ├── test_solicitudes.py
 ├── test_administrar.py
 ├── test_archivos.py
+├── test_foro.py
 ├── test_hello.py
 ├── test_rate_limit.py
 ├── test_seed.py
@@ -245,6 +247,23 @@ Los archivos se guardan en Backblaze B2 si está definida `B2_BUCKET` (el disco 
 en cada deploy); si no, en la carpeta `UPLOADS_DIR`. Para configurar B2: crear un bucket
 **privado**, una application key con acceso a ese bucket, y definir las cuatro variables `B2_*`
 en Render (el endpoint aparece en el detalle del bucket, ej. `https://s3.us-west-004.backblazeb2.com`).
+
+### Foro del grupo
+
+Temas con su pregunta (por ejemplo «Guía 2 – Ejercicio 3») y las respuestas debajo, en orden. Solo
+los integrantes del grupo. Todas requieren sesión.
+
+| Método y ruta                         | Qué hace                                                       |
+| ------------------------------------- | -------------------------------------------------------------- |
+| `GET /api/grupos/{id}/foro`           | Temas del grupo, primero los de actividad más reciente         |
+| `POST /api/grupos/{id}/foro`          | Abre un tema: `{titulo, contenido}` (201)                      |
+| `GET /api/foro/{id}`                  | El tema con todas sus respuestas                               |
+| `POST /api/foro/{id}/respuestas`      | Responde el tema: `{contenido}` (201); el tema sube en la lista |
+
+Título de hasta 150 caracteres y textos de hasta 5000 (422 si no). A quien no es integrante, la
+lista y abrir un tema le responden 403, y ver o responder un tema, 404. Lo que escribió quien deja
+el grupo se conserva. No hay consultas periódicas: el frontend carga el foro al abrirlo y con el
+botón «Actualizar», para no mantener despierta la base de datos (capa gratuita de Neon).
 
 ## Perfil y mis asignaturas
 

@@ -289,3 +289,49 @@ class ArchivoOut(BaseModel):
     creado_en: datetime
     # Lo subió el usuario o es el creador del grupo
     puede_eliminar: bool
+
+
+class TemaForoIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    titulo: str = Field(min_length=1, max_length=150)
+    contenido: str = Field(min_length=1, max_length=5000)
+
+
+class RespuestaForoIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    contenido: str = Field(min_length=1, max_length=5000)
+
+
+class TemaResumenOut(BaseModel):
+    """Tema en la lista del foro, sin las respuestas."""
+
+    id: int
+    titulo: str
+    # Nombre de quien lo abrió
+    autor: str
+    creado_en: datetime
+    ultima_actividad_en: datetime
+    total_respuestas: int
+
+
+class RespuestaForoOut(BaseModel):
+    id: int
+    autor: str
+    # La escribió el usuario de la sesión
+    es_mia: bool
+    contenido: str
+    creado_en: datetime
+
+
+class TemaForoOut(BaseModel):
+    """Tema completo, con su pregunta y las respuestas de la más antigua a la más nueva."""
+
+    id: int
+    titulo: str
+    autor: str
+    es_mio: bool
+    contenido: str
+    creado_en: datetime
+    respuestas: list[RespuestaForoOut]
