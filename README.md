@@ -204,6 +204,11 @@ solicitudes» trae solo las de grupos vigentes, las más recientes primero y sin
 grupo viene como en el buscador, sin lugar ni enlace. A quien no es el
 creador, las rutas de `/api/solicitudes` le responden 404.
 
+**Aviso por correo.** Al aceptar o rechazar, se le envía un correo a quien pidió unirse
+(`send_request_answered_email` en `app/mailer.py`). Se envía en segundo plano, después de
+responderle al creador; si Brevo falla, la respuesta igual queda guardada y el error queda en el
+log. Sin `BREVO_API_KEY`, el correo se muestra en la consola del backend.
+
 ### Administrar y abandonar
 
 | Método y ruta                                | Quién       | Qué hace                                       |
