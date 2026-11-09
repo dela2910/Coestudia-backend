@@ -49,7 +49,19 @@ def reset_outbox(monkeypatch):
 
 
 @pytest.fixture
-def client(session_factory, outbox):
+def answer_outbox(monkeypatch):
+    """Avisos de solicitud respondida que la API habría enviado:
+    (destinatario, nombre, asignatura, aceptada)."""
+    sent = []
+    monkeypatch.setattr(
+        "app.routers.solicitudes.send_request_answered_email",
+        lambda to, name, subject, accepted: sent.append((to, name, subject, accepted)),
+    )
+    return sent
+
+
+@pytest.fixture
+def client(session_factory, outbox, answer_outbox):
     def override_get_db():
         with session_factory() as session:
             yield session

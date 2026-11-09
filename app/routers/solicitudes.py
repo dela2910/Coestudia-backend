@@ -1,10 +1,13 @@
 """Solicitudes para unirse a un grupo: las que envió el usuario («mis solicitudes») y responder
-las de sus grupos (solo el creador)."""
+las de sus grupos (solo el creador). Al responder, se avisa por correo a quien la envió."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.mailer import send_request_answered_email
 from app.models import MiembroGrupo, Solicitud, Usuario, now_utc
 from app.routers.grupos import (
     ACTIVE_REQUEST_STATES,
@@ -16,6 +19,8 @@ from app.routers.grupos import (
 )
 from app.schemas import GrupoMioOut, GrupoResumenOut, MiSolicitudOut
 from app.security import current_user
+
+logger = logging.getLogger("coestudia.solicitudes")
 
 router = APIRouter(prefix="/api/solicitudes", tags=["solicitudes"])
 
@@ -54,9 +59,30 @@ def pending_of_my_group(db: Session, solicitud_id: int, user: Usuario) -> Solici
     return request
 
 
+def notify_answer(email: str, name: str, subject: str, accepted: bool) -> None:
+    # Si el correo falla la respuesta igual queda guardada: se ve en «Mis solicitudes»
+    try:
+        send_request_answered_email(email, name, subject, accepted)
+    except Exception:
+        logger.exception("No se pudo avisar por correo la respuesta de la solicitud a %s", email)
+
+
+def schedule_notification(tasks: BackgroundTasks, request: Solicitud, accepted: bool) -> None:
+    """El correo se envía después de responder al creador, para que no espere a Brevo. Se copian
+    los datos ahora porque la sesión de la base ya estará cerrada."""
+    applicant = request.usuario
+    if applicant.eliminado_en is not None:
+        return
+    subject = f"{request.grupo.asignatura.sigla} {request.grupo.asignatura.nombre}"
+    tasks.add_task(notify_answer, applicant.email, applicant.nombre, subject, accepted)
+
+
 @router.post("/{solicitud_id}/aceptar", response_model=GrupoMioOut)
 def accept_request(
-    solicitud_id: int, user: Usuario = Depends(current_user), db: Session = Depends(get_db)
+    solicitud_id: int,
+    tasks: BackgroundTasks,
+    user: Usuario = Depends(current_user),
+    db: Session = Depends(get_db),
 ):
     """Suma a quien la envió como integrante. Si con eso se llena el cupo, las demás solicitudes
     quedan en espera hasta que se libere uno."""
@@ -75,16 +101,21 @@ def accept_request(
     group.miembros.append(MiembroGrupo(usuario_id=request.usuario_id))
     sync_waitlist(group)
     db.commit()
+    schedule_notification(tasks, request, accepted=True)
     db.refresh(group)
     return mine_out(group, user)
 
 
 @router.post("/{solicitud_id}/rechazar", response_model=GrupoMioOut)
 def reject_request(
-    solicitud_id: int, user: Usuario = Depends(current_user), db: Session = Depends(get_db)
+    solicitud_id: int,
+    tasks: BackgroundTasks,
+    user: Usuario = Depends(current_user),
+    db: Session = Depends(get_db),
 ):
     request = pending_of_my_group(db, solicitud_id, user)
     request.estado = "rechazada"
     request.respondida_en = now_utc()
     db.commit()
+    schedule_notification(tasks, request, accepted=False)
     return mine_out(request.grupo, user)
