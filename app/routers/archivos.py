@@ -1,7 +1,6 @@
 """Archivos compartidos dentro de un grupo (CU12, RF19). Solo los integrantes los ven, suben y
 descargan; los borra quien lo subió o el creador del grupo."""
 
-import codecs
 import logging
 import mimetypes
 import uuid
@@ -12,6 +11,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.extract import extract_text
 from app.models import Archivo, GrupoEstudio, Usuario
 from app.routers.grupos import is_active, visible_group
 from app.schemas import ArchivoOut
@@ -34,27 +34,10 @@ ALLOWED_EXTENSIONS = {
     "txt", "md",
     "png", "jpg", "jpeg", "gif", "webp", "heic",
 }  # fmt: skip
-# Se guarda su texto para que lo lea el asistente (B13)
-TEXT_EXTENSIONS = {"txt", "md", "csv"}
 
 
 def extension(name: str) -> str:
     return PurePath(name).suffix.lower().removeprefix(".")
-
-
-def decode_text(data: bytes) -> str:
-    """Texto de un archivo .txt, .md o .csv. Además de UTF-8 reconoce UTF-16, que es lo que guarda
-    Excel como «texto Unicode»."""
-    if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
-        text = data.decode("utf-16", errors="replace")
-    elif b"\x00" in data[:2]:
-        # UTF-16 sin BOM: el byte en cero va después de cada letra común (LE) o antes (BE)
-        encoding = "utf-16-le" if data[1:2] == b"\x00" else "utf-16-be"
-        text = data.decode(encoding, errors="replace")
-    else:
-        text = data.decode("utf-8-sig", errors="replace")
-    # PostgreSQL no acepta el carácter NUL en un texto
-    return text.replace("\x00", "")
 
 
 def member_group(db: Session, grupo_id: int, user: Usuario) -> GrupoEstudio:
@@ -146,7 +129,8 @@ def upload_file(
         tipo_mime=mime,
         tamano_bytes=len(data),
         clave_almacenamiento=key,
-        texto_extraido=decode_text(data) if ext in TEXT_EXTENSIONS else None,
+        # Lo lee el asistente de estudio (B13)
+        texto_extraido=extract_text(data, ext),
     )
     db.add(file)
     try:

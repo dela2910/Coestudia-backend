@@ -335,3 +335,29 @@ class TemaForoOut(BaseModel):
     contenido: str
     creado_en: datetime
     respuestas: list[RespuestaForoOut]
+
+
+class PreguntaAsistenteIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    contenido: str = Field(min_length=1, max_length=2000)
+
+
+class FuenteOut(BaseModel):
+    """Archivo del grupo que el asistente usó para responder."""
+
+    id: int
+    nombre: str
+
+
+class MensajeAsistenteOut(BaseModel):
+    id: int
+    # true = lo escribió el asistente, false = un integrante
+    es_asistente: bool
+    # Nombre de quien preguntó; None en las respuestas del asistente
+    autor: str | None
+    # La pregunta la hizo el usuario de la sesión
+    es_mio: bool
+    contenido: str
+    creado_en: datetime
+    fuentes: list[FuenteOut]

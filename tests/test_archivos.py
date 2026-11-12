@@ -79,11 +79,13 @@ def test_upload_keeps_only_the_file_name(client, users, group):
 
 def test_text_files_save_their_text_for_the_assistant(client, users, group, session_factory):
     upload(client, users["ana"], group, name="resumen.md", content="# Series\nConvergen".encode())
+    # Un PDF dañado se sube igual, pero sin texto; una imagen no tiene texto que leer
     upload(client, users["ana"], group, name="guia.pdf")
+    upload(client, users["ana"], group, name="pizarra.png", content=b"\x89PNG")
 
     with session_factory() as db:
         texts = {f.nombre: f.texto_extraido for f in db.query(Archivo)}
-    assert texts == {"resumen.md": "# Series\nConvergen", "guia.pdf": None}
+    assert texts == {"resumen.md": "# Series\nConvergen", "guia.pdf": "", "pizarra.png": None}
 
 
 @pytest.mark.parametrize(
