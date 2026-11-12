@@ -24,8 +24,11 @@ Para usar variables locales (por ejemplo la API key de Brevo), crea un `.env` co
 necesites (ver `.env.example`) y arranca con `uvicorn app.main:app --reload --env-file .env`.
 No copies `DATABASE_URL` de ejemplo: si no la defines se usa SQLite.
 
-Para trabajar contra PostgreSQL en vez de SQLite, exporta `DATABASE_URL` antes de correr
-`alembic` y `uvicorn` (ver `.env.example`).
+**No pongas la `DATABASE_URL` de producción (Neon) en tu `.env`:** el servidor local escribiría en
+la base real (usuarios, mensajes y pruebas). Las migraciones de producción las aplica el CD (ver
+«Cómo publicar una versión»). Para probar con PostgreSQL, usa una base o branch de Neon aparte y
+exporta su `DATABASE_URL` antes de correr `alembic` y `uvicorn`. Los tests (`pytest`) siempre usan
+una SQLite temporal.
 
 - http://localhost:8000/health
 - http://localhost:8000/api/hello
@@ -335,6 +338,9 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-El workflow `release.yml` crea el release en GitHub con notas autogeneradas y luego dispara el
-deploy en Render mediante el secret `RENDER_DEPLOY_HOOK`. Usar versionado semántico
+El workflow `release.yml` tiene tres etapas: `Crear release` (release en GitHub con notas
+autogeneradas) → `Migrar base de datos` (`alembic upgrade head` en Neon con el secret
+`DATABASE_URL`) → `Deploy a Render` (deploy hook del secret `RENDER_DEPLOY_HOOK`). Si una migración
+falla, no se despliega. Las migraciones deben ser compatibles con la versión anterior por un rato:
+se aplican antes de que Render termine de levantar el código nuevo. Usar versionado semántico
 (`vMAYOR.MENOR.PARCHE`).
