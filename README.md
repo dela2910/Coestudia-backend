@@ -102,6 +102,8 @@ tests/
 | `MAIL_FROM`     | Remitente de los correos (debe estar validado en Brevo).             |
 | `B2_BUCKET`     | Bucket de Backblaze B2 para los archivos. Sin él se usa `UPLOADS_DIR`. |
 | `B2_ENDPOINT`, `B2_KEY_ID`, `B2_APPLICATION_KEY` | Endpoint S3 y application key de B2.   |
+| `ANTHROPIC_API_KEY` | API key de Anthropic para el asistente de estudio. Sin ella responde que no está configurado. |
+| `ANTHROPIC_MODEL` | Opcional. Modelo del asistente; por defecto `claude-haiku-5-5`. |
 | `UPLOADS_DIR`   | Carpeta local para los archivos en desarrollo (por defecto `uploads`). |
 
 `http://localhost:5173` (Vite) siempre está permitido.

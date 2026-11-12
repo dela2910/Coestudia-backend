@@ -350,7 +350,8 @@ class MensajeAsistente(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     grupo_id: Mapped[int] = mapped_column(ForeignKey("grupo_estudio.id", ondelete="CASCADE"))
-    # Dueño de la conversación
+    # Quien hizo la pregunta (en las respuestas, la pregunta que responden). La conversación es
+    # del grupo: la ven todos los integrantes
     usuario_id: Mapped[int] = mapped_column(ForeignKey("usuario.id", ondelete="CASCADE"))
     # true = lo escribió el asistente, false = lo escribió el usuario
     es_asistente: Mapped[bool] = mapped_column(Boolean)
