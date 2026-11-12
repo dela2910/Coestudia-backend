@@ -1,6 +1,7 @@
 import io
 import zipfile
 
+from app import extract
 from app.extract import extract_text
 
 
@@ -66,6 +67,34 @@ def test_reads_word_paragraphs():
     assert extract_text(make_zip({"word/document.xml": xml}), "docx") == (
         "Unidad 1: Límites\nDefinición épsilon-delta"
     )
+
+
+def test_word_line_breaks_and_tabs_separate_text():
+    xml = (
+        f"<w:document {W}><w:body><w:p>"
+        "<w:r><w:t>Primera</w:t><w:br/><w:t>Segunda</w:t><w:tab/><w:t>tercera</w:t></w:r>"
+        "</w:p></w:body></w:document>"
+    )
+
+    assert extract_text(make_zip({"word/document.xml": xml}), "docx") == (
+        "Primera\nSegunda\ttercera"
+    )
+
+
+def test_nested_paragraphs_are_read_once():
+    # Un archivo hecho para que cada párrafo repita el texto de los de adentro
+    xml = f"<w:document {W}><w:body>" + "<w:p>" * 50 + "<w:t>Texto</w:t>" + "</w:p>" * 50
+    xml += "</w:body></w:document>"
+
+    assert extract_text(make_zip({"word/document.xml": xml}), "docx") == "Texto"
+
+
+def test_text_is_capped(monkeypatch):
+    monkeypatch.setattr(extract, "MAX_TEXT_CHARS", 10)
+    xml = f"<w:document {W}><w:body><w:p><w:t>{'a' * 50}</w:t></w:p></w:body></w:document>"
+
+    assert extract_text(make_zip({"word/document.xml": xml}), "docx") == "a" * 10
+    assert extract_text(b"b" * 50, "txt") == "b" * 10
 
 
 def test_reads_powerpoint_slides_in_order():

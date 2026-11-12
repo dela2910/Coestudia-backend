@@ -100,13 +100,23 @@ def check_daily_limit(db: Session, user: Usuario) -> None:
         )
 
 
+def visible_messages(group: GrupoEstudio):
+    return select(MensajeAsistente).where(
+        MensajeAsistente.grupo_id == group.id, MensajeAsistente.oculto.is_(False)
+    )
+
+
 def conversation(db: Session, group: GrupoEstudio) -> list[MensajeAsistente]:
     """Conversación del grupo con el asistente, de la más antigua a la más nueva."""
-    return db.scalars(
-        select(MensajeAsistente)
-        .where(MensajeAsistente.grupo_id == group.id)
-        .order_by(MensajeAsistente.id)
+    return db.scalars(visible_messages(group).order_by(MensajeAsistente.id)).all()
+
+
+def recent_history(db: Session, group: GrupoEstudio) -> list[MensajeAsistente]:
+    """Últimos mensajes de la conversación, los que se mandan a Claude como contexto."""
+    latest = db.scalars(
+        visible_messages(group).order_by(MensajeAsistente.id.desc()).limit(HISTORY_MESSAGES)
     ).all()
+    return list(reversed(latest))
 
 
 def message_out(message: MensajeAsistente, user: Usuario) -> MensajeAsistenteOut:
@@ -136,9 +146,13 @@ def file_text(db: Session, file: Archivo, storage) -> str:
     return file.texto_extraido or ""
 
 
-def select_material(db: Session, group: GrupoEstudio, storage) -> tuple[list[Archivo], list[str]]:
-    """Archivos con texto que caben en el tope, priorizando los más recientes, y los nombres de
-    los que quedaron fuera por espacio."""
+def select_material(
+    db: Session, group: GrupoEstudio, storage
+) -> tuple[list[tuple[Archivo, str]], str | None]:
+    """Archivos con texto que caben en el tope, priorizando los más recientes, junto con su texto.
+    Además, un aviso si parte del material quedó fuera por espacio.
+
+    Si ni el archivo más reciente cabe entero (un libro, por ejemplo), se manda su comienzo."""
     newest_first = sorted(group.archivos, key=lambda f: f.id, reverse=True)
     chosen, left_out, total = [], [], 0
     for file in newest_first:
@@ -146,12 +160,21 @@ def select_material(db: Session, group: GrupoEstudio, storage) -> tuple[list[Arc
         if not text:
             continue
         if total + len(text) > MAX_MATERIAL_CHARS:
-            left_out.append(file.nombre)
+            left_out.append((file, text))
             continue
-        chosen.append(file)
+        chosen.append((file, text))
         total += len(text)
+
+    notices = []
+    if not chosen and left_out:
+        file, text = left_out.pop(0)
+        chosen.append((file, text[:MAX_MATERIAL_CHARS]))
+        notices.append(f"{file.nombre} es muy largo: solo alcancé a leer su comienzo.")
+    if left_out:
+        names = ", ".join(file.nombre for file, _ in left_out)
+        notices.append(f"El material del grupo es muy largo y no alcancé a leer: {names}.")
     # En orden de subida: así el material queda igual entre preguntas y se aprovecha el caché
-    return sorted(chosen, key=lambda f: f.id), left_out
+    return sorted(chosen, key=lambda item: item[0].id), " ".join(notices) or None
 
 
 def question_text(author: str, text: str) -> str:
@@ -160,7 +183,10 @@ def question_text(author: str, text: str) -> str:
 
 
 def build_messages(
-    files: list[Archivo], history: list[MensajeAsistente], user: Usuario, question: str
+    material: list[tuple[Archivo, str]],
+    history: list[MensajeAsistente],
+    user: Usuario,
+    question: str,
 ) -> list:
     """Mensajes para Claude: el material va al inicio del primer mensaje del usuario."""
     turns = history[-HISTORY_MESSAGES:]
@@ -183,11 +209,11 @@ def build_messages(
     documents = [
         {
             "type": "document",
-            "source": {"type": "text", "media_type": "text/plain", "data": f.texto_extraido},
-            "title": f.nombre,
+            "source": {"type": "text", "media_type": "text/plain", "data": text},
+            "title": file.nombre,
             "citations": {"enabled": True},
         }
-        for f in files
+        for file, text in material
     ]
     # Hasta el último documento el contenido se repite entre preguntas: se guarda en caché
     documents[-1]["cache_control"] = {"type": "ephemeral"}
@@ -281,12 +307,11 @@ def ask(
         )
     check_daily_limit(db, user)
 
-    files, left_out = select_material(db, group, storage)
-    if files:
-        history = conversation(db, group)
-        response = ask_claude(
-            client, group.asignatura.nombre, build_messages(files, history, user, body.contenido)
-        )
+    material, notice = select_material(db, group, storage)
+    if material:
+        files = [file for file, _ in material]
+        messages = build_messages(material, recent_history(db, group), user, body.contenido)
+        response = ask_claude(client, group.asignatura.nombre, messages)
         text, sources = reply_text_and_sources(response, files)
         logger.info(
             "Asistente grupo=%s tokens entrada=%s caché=%s salida=%s",
@@ -295,11 +320,8 @@ def ask(
             response.usage.cache_read_input_tokens,
             response.usage.output_tokens,
         )
-        if left_out:
-            text += (
-                "\n\n(El material del grupo es muy largo y no alcancé a leer: "
-                f"{', '.join(left_out)}.)"
-            )
+        if notice:
+            text += f"\n\n({notice})"
     else:
         # Sin material no se llama a Claude: no tendría de dónde responder
         text, sources = NO_MATERIAL_REPLY, []
@@ -326,6 +348,13 @@ def clear_conversation(
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "Solo el creador del grupo puede borrar la conversación."
         )
+    since = now_utc() - timedelta(hours=24)
     for message in conversation(db, group):
-        db.delete(message)
+        if not message.es_asistente and as_utc(message.creado_en) > since:
+            # Las preguntas del último día se ocultan en vez de borrarse: si no, borrar la
+            # conversación reiniciaría el límite diario de preguntas
+            message.oculto = True
+            message.contenido = ""
+        else:
+            db.delete(message)
     db.commit()

@@ -357,6 +357,9 @@ class MensajeAsistente(Base):
     es_asistente: Mapped[bool] = mapped_column(Boolean)
     contenido: Mapped[str] = mapped_column(Text)
     creado_en: Mapped[datetime] = created_at()
+    # Pregunta de una conversación borrada: ya no se muestra (y queda sin texto), pero sigue
+    # contando para el límite diario de preguntas de quien la hizo
+    oculto: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
     grupo: Mapped[GrupoEstudio] = relationship(back_populates="mensajes")
     usuario: Mapped[Usuario] = relationship()

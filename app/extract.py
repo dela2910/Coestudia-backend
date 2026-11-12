@@ -20,6 +20,9 @@ EXTRACTABLE_EXTENSIONS = TEXT_EXTENSIONS | ZIP_EXTENSIONS | {"pdf"}
 
 # Tope de lo que se descomprime de un ZIP, contra archivos que se inflan al abrirlos
 MAX_UNZIPPED_BYTES = 50 * 1024 * 1024
+# Tope del texto que se guarda por archivo. El asistente manda a lo más 250 mil caracteres por
+# pregunta (MAX_MATERIAL_CHARS), así que más que esto no se usaría
+MAX_TEXT_CHARS = 1_000_000
 
 
 def decode_text(data: bytes) -> str:
@@ -48,16 +51,58 @@ def _pdf_text(data: bytes) -> str:
     return "\n\n".join(pages)
 
 
-def _xml_paragraphs(xml: bytes) -> list[str]:
-    """Párrafos de un XML de Word, PowerPoint u OpenDocument, en orden."""
+def _local(tag) -> str:
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+# Elementos que separan texto sin tenerlo: saltos de línea y tabulaciones de Word, PowerPoint
+# (a:br) y OpenDocument (text:line-break, text:tab, text:s = espacio)
+SEPARATORS = {"br": "\n", "cr": "\n", "line-break": "\n", "tab": "\t", "s": " "}
+
+
+def _paragraph_text(paragraph, budget: int) -> str:
+    """Texto de un párrafo, con sus saltos de línea y tabulaciones. Los fragmentos de una misma
+    palabra (<w:t>Lí</w:t><w:t>mites</w:t>) se juntan sin espacio."""
+    out, size = [], 0
+    # Pila de pendientes: un elemento (se recorre) o un texto suelto (su .tail, que va después)
+    pending = [paragraph]
+    while pending and size < budget:
+        item = pending.pop()
+        if isinstance(item, str):
+            out.append(item)
+            size += len(item)
+            continue
+        if item is not paragraph and _local(item.tag) in SEPARATORS:
+            out.append(SEPARATORS[_local(item.tag)])
+            size += 1
+            continue
+        if item.text:
+            out.append(item.text)
+            size += len(item.text)
+        for child in reversed(item):
+            if child.tail:
+                pending.append(child.tail)
+            pending.append(child)
+    return "".join(out)[:budget]
+
+
+def _xml_paragraphs(xml: bytes, budget: int) -> list[str]:
+    """Párrafos de un XML de Word, PowerPoint u OpenDocument, en orden, hasta `budget` caracteres.
+
+    Un párrafo dentro de otro (por ejemplo, una nota al pie de OpenDocument) se lee como parte del
+    de afuera: así cada texto se lee una sola vez, aunque el archivo traiga párrafos anidados."""
     paragraphs = []
-    for element in ElementTree.fromstring(xml).iter():
-        tag = element.tag.rsplit("}", 1)[-1]
+    pending = [ElementTree.fromstring(xml)]
+    while pending and budget > 0:
+        element = pending.pop()
         # Word y PowerPoint usan <p>; OpenDocument usa <p> y <h> (títulos)
-        if tag in ("p", "h"):
-            text = "".join(element.itertext()).strip()
+        if _local(element.tag) in ("p", "h"):
+            text = _paragraph_text(element, budget).strip()
             if text:
                 paragraphs.append(text)
+                budget -= len(text) + 1
+        else:
+            pending.extend(reversed(element))
     return paragraphs
 
 
@@ -75,11 +120,12 @@ def _zip_text(data: bytes, ext: str) -> str:
         if sum(package.getinfo(p).file_size for p in parts if p in names) > MAX_UNZIPPED_BYTES:
             raise ValueError("El archivo descomprimido es demasiado grande")
 
-        sections = []
+        sections, budget = [], MAX_TEXT_CHARS
         for number, part in enumerate(parts, start=1):
-            if part not in names:
+            if part not in names or budget <= 0:
                 continue
-            text = "\n".join(_xml_paragraphs(package.read(part)))
+            text = "\n".join(_xml_paragraphs(package.read(part), budget))
+            budget -= len(text) + 2
             if text and ext == "pptx":
                 text = f"[Diapositiva {number}]\n{text}"
             if text:
@@ -104,4 +150,4 @@ def extract_text(data: bytes, ext: str) -> str | None:
         logger.warning("No se pudo extraer el texto de un archivo .%s", ext, exc_info=True)
         text = ""
     # PostgreSQL no acepta el carácter NUL en un texto
-    return text.replace("\x00", "").strip()
+    return text.replace("\x00", "")[:MAX_TEXT_CHARS].strip()

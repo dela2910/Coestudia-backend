@@ -148,6 +148,29 @@ def test_leaves_out_material_over_the_limit_and_says_so(client, users, group, cl
     assert "no alcancé a leer: viejo.txt" in reply["contenido"]
 
 
+def test_a_file_over_the_limit_is_read_from_the_start(client, users, group, claude, monkeypatch):
+    monkeypatch.setattr(asistente, "MAX_MATERIAL_CHARS", 40)
+    notes(client, users["ana"], group, name="libro.txt", text="a" * 30 + "b" * 30)
+
+    reply = ask(client, users["ana"], group).json()
+
+    document = claude.calls[0]["messages"][0]["content"][0]
+    assert document["title"] == "libro.txt"
+    assert document["source"]["data"] == "a" * 30 + "b" * 10
+    assert "libro.txt es muy largo: solo alcancé a leer su comienzo." in reply["contenido"]
+
+
+def test_only_the_latest_messages_are_sent_as_context(client, users, group, claude, monkeypatch):
+    monkeypatch.setattr(asistente, "HISTORY_MESSAGES", 2)
+    notes(client, users["ana"], group)
+    for text in ("Pregunta 1", "Pregunta 2", "Pregunta 3"):
+        ask(client, users["ana"], group, text)
+
+    messages = claude.calls[-1]["messages"]
+    assert messages[0]["content"][-1]["text"] == "Ana Rojas: Pregunta 2"
+    assert messages[-1]["content"] == "Ana Rojas: Pregunta 3"
+
+
 def test_sources_are_the_cited_files_without_repeats(client, users, group, claude):
     notes(client, users["ana"], group, name="a.txt")
     notes(client, users["ana"], group, name="b.txt")
@@ -209,9 +232,9 @@ def test_consecutive_questions_are_joined_in_one_turn():
         SimpleNamespace(es_asistente=False, usuario=luis, contenido="Pregunta 2"),
         SimpleNamespace(es_asistente=True, usuario=ana, contenido="Respuesta"),
     ]
-    file = SimpleNamespace(nombre="a.txt", texto_extraido="material")
+    file = SimpleNamespace(nombre="a.txt")
 
-    messages = asistente.build_messages([file], history, ana, "Pregunta 3")
+    messages = asistente.build_messages([(file, "material")], history, ana, "Pregunta 3")
 
     assert [m["role"] for m in messages] == ["user", "assistant", "user"]
     assert messages[0]["content"][-1]["text"] == "Ana: Pregunta 1\n\nLuis: Pregunta 2"
@@ -270,6 +293,20 @@ def test_daily_question_limit(client, users, group, claude, monkeypatch):
 
     assert response.status_code == 429
     assert len(claude.calls) == 2
+
+
+def test_clearing_the_conversation_does_not_reset_the_daily_limit(
+    client, users, group, claude, monkeypatch
+):
+    monkeypatch.setattr(asistente, "MAX_QUESTIONS_PER_DAY", 2)
+    notes(client, users["ana"], group)
+    ask(client, users["ana"], group)
+    ask(client, users["ana"], group)
+
+    client.delete(f"/api/grupos/{group}/asistente", headers=users["ana"])
+
+    assert client.get(f"/api/grupos/{group}/asistente", headers=users["ana"]).json() == []
+    assert ask(client, users["ana"], group).status_code == 429
 
 
 @pytest.mark.parametrize("text", ["", "   ", "x" * 2001])
