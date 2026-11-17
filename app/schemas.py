@@ -361,3 +361,19 @@ class MensajeAsistenteOut(BaseModel):
     contenido: str
     creado_en: datetime
     fuentes: list[FuenteOut]
+
+
+class GrupoSugeridoOut(GrupoResumenOut):
+    """Grupo sugerido al usuario, con los motivos de la sugerencia (ej. «Cursas MAT1620»)."""
+
+    motivos: list[str]
+
+
+class AsignaturaSugeridaOut(BaseModel):
+    """Asignatura de la búsqueda sugerida, con los grupos que tiene disponibles para el usuario."""
+
+    asignatura: AsignaturaOut
+    # Grupos vigentes, abiertos y con cupo donde el usuario aún no está
+    grupos_disponibles: int
+    # Por qué se sugiere (ej. «Está en tus asignaturas»); None si solo calza con lo escrito
+    motivo: str | None

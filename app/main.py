@@ -13,6 +13,7 @@ from app.routers import (
     hello,
     perfil,
     solicitudes,
+    sugerencias,
 )
 
 app = FastAPI(title="Coestudia API", version="0.1.0")
@@ -40,3 +41,4 @@ app.include_router(solicitudes.router)
 app.include_router(archivos.router)
 app.include_router(foro.router)
 app.include_router(asistente.router)
+app.include_router(sugerencias.router)
