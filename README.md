@@ -72,7 +72,8 @@ app/
     ├── grupos.py    # /api/grupos: buscar, detalle, crear, mis grupos, pedir unirse, administrar y abandonar
     ├── solicitudes.py  # /api/solicitudes: mis solicitudes; aceptar o rechazar (el creador)
     ├── archivos.py  # archivos del grupo: subir, listar, descargar y eliminar
-    └── foro.py      # foro del grupo: temas y respuestas
+    ├── foro.py      # foro del grupo: temas y respuestas
+    └── sugerencias.py  # /api/sugerencias: grupos sugeridos y búsqueda sugerida de asignaturas
 migrations/          # migraciones de Alembic
 tests/
 ├── conftest.py      # cliente de pruebas con base SQLite y bandeja de correos
