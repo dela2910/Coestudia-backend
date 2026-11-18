@@ -8,7 +8,7 @@ para otra base hay que pasar --forzar.
 """
 
 import sys
-from datetime import timedelta
+from datetime import time, timedelta
 
 from sqlalchemy import select
 
@@ -54,7 +54,7 @@ GROUPS = [
         "Biblioteca central, sala 2",
         5,
         35,
-        [(1, False)],
+        [(1, "15:30", "17:00")],
         ["luis.castro@uc.cl", "sofia.perez@uc.cl"],
         "Repasamos integrales múltiples y series antes del certamen.",
     ),
@@ -65,7 +65,7 @@ GROUPS = [
         "https://meet.google.com/abc-defg-hij",
         4,
         42,
-        [(3, True)],
+        [(3, "10:00", "11:30")],
         [],
         "Sesiones cortas de 1 hora resolviendo ejercicios de controles anteriores.",
     ),
@@ -76,7 +76,7 @@ GROUPS = [
         "Sala de estudio Facultad de Ingeniería",
         3,
         36,
-        [(5, True)],
+        [(5, "09:30", "12:00")],
         ["ana.rojas@uc.cl", "benjamin.vera@uc.cl"],
         "Grupo intensivo de fin de semana.",
     ),
@@ -87,7 +87,7 @@ GROUPS = [
         "https://discord.gg/fisica1513",
         4,
         49,
-        [(0, False), (2, False)],
+        [(0, "14:00", "15:20"), (2, "16:40", "18:00")],
         [],
         "Dinámica y trabajo-energía. Nos juntamos a hacer la tarea semanal.",
     ),
@@ -98,7 +98,7 @@ GROUPS = [
         "Casino central",
         6,
         42,
-        [(2, True)],
+        [(2, "08:20", "10:00")],
         ["sofia.perez@uc.cl"],
         "Matrices, determinantes y espacios vectoriales.",
     ),
@@ -109,7 +109,7 @@ GROUPS = [
         "https://meet.google.com/ing-soft-uc",
         5,
         30,
-        [(1, True), (3, True)],
+        [(1, "11:00", "12:20"), (3, "11:00", "12:20")],
         ["benjamin.vera@uc.cl"],
         "Preparación de las entregas del proyecto y del examen.",
     ),
@@ -159,7 +159,12 @@ def seed(db) -> bool:
             vigente_hasta=today_in_chile() + timedelta(days=days),
             descripcion=description,
         )
-        group.horarios = [HorarioGrupo(dia_semana=d, es_manana=m) for d, m in schedule]
+        group.horarios = [
+            HorarioGrupo(
+                dia_semana=d, hora_inicio=time.fromisoformat(a), hora_fin=time.fromisoformat(b)
+            )
+            for d, a, b in schedule
+        ]
         group.miembros = [MiembroGrupo(usuario=u) for u in members]
         db.add(group)
 

@@ -1,11 +1,14 @@
 """Formato de entrada y salida de la API (Pydantic)."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer, field_validator
 
 # bcrypt usa solo los primeros 72 bytes de la contraseña
 PASSWORD_MAX_BYTES = 72
+
+# Horarios por grupo: hasta dos por día
+MAX_HORARIOS = 12
 
 
 class RegistroIn(BaseModel):
@@ -142,13 +145,26 @@ class HorarioOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     dia_semana: int
-    es_manana: bool
+    hora_inicio: time
+    hora_fin: time
+
+    @field_serializer("hora_inicio", "hora_fin")
+    def as_hour_minute(self, value: time) -> str:
+        # "15:30" en vez de "15:30:00"
+        return value.strftime("%H:%M")
 
 
 class HorarioIn(BaseModel):
     # 0 = lunes ... 5 = sábado
     dia_semana: int = Field(ge=0, le=5)
-    es_manana: bool
+    hora_inicio: time
+    hora_fin: time
+
+    @field_validator("hora_inicio", "hora_fin")
+    @classmethod
+    def only_minutes(cls, value: time) -> time:
+        # Se guardan horas y minutos; los segundos y la zona horaria no aportan
+        return value.replace(second=0, microsecond=0, tzinfo=None)
 
 
 class GrupoIn(BaseModel):
@@ -167,8 +183,7 @@ class GrupoIn(BaseModel):
     # Incluye al creador
     cupo_maximo: int = Field(ge=2, le=10)
     vigente_hasta: date
-    # 6 días x 2 bloques
-    horarios: list[HorarioIn] = Field(min_length=1, max_length=12)
+    horarios: list[HorarioIn] = Field(min_length=1, max_length=MAX_HORARIOS)
 
 
 class GrupoEditIn(BaseModel):
@@ -182,7 +197,7 @@ class GrupoEditIn(BaseModel):
     enlace: str | None = Field(default=None, max_length=500)
     cupo_maximo: int = Field(ge=2, le=10)
     vigente_hasta: date
-    horarios: list[HorarioIn] = Field(min_length=1, max_length=12)
+    horarios: list[HorarioIn] = Field(min_length=1, max_length=MAX_HORARIOS)
     # false = cerrado: no recibe solicitudes nuevas
     abierto: bool
 

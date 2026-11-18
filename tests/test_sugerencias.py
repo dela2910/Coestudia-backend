@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import time, timedelta
 
 import pytest
 
@@ -14,6 +14,18 @@ from app.models import (
     today_in_chile,
 )
 from tests.conftest import UC
+
+
+def hours(morning: bool) -> dict:
+    """Horario de prueba: 9:00-11:00 si es de mañana, 15:00-17:00 si es de tarde."""
+    return (
+        {"hora_inicio": time(9), "hora_fin": time(11)}
+        if morning
+        else {
+            "hora_inicio": time(15),
+            "hora_fin": time(17),
+        }
+    )
 
 
 def make_user(db, email, career="Ingeniería Civil", university=UC):
@@ -65,7 +77,7 @@ def data(session_factory, users):
                 creado_en=fields.pop("creado_en", old),
                 **fields,
             )
-            g.horarios = [HorarioGrupo(dia_semana=d, es_manana=m) for d, m in schedule]
+            g.horarios = [HorarioGrupo(dia_semana=d, **hours(m)) for d, m in schedule]
             g.miembros = [MiembroGrupo(usuario=u) for u in (creator, *members)]
             db.add(g)
             return g
@@ -172,11 +184,20 @@ def test_excludes_groups_with_active_or_rejected_requests(client, users, data, s
     assert data["calculo_con_peer"] in results
 
 
-def test_schedule_clash_goes_last(client, users, data, session_factory):
+@pytest.mark.parametrize(
+    "busy",
+    [
+        # El mismo horario que «calculo» (martes 15:00-17:00)
+        hours(False),
+        # Solo se cruza una parte
+        {"hora_inicio": time(16, 30), "hora_fin": time(18)},
+    ],
+)
+def test_schedule_clash_goes_last(client, users, data, session_factory, busy):
     with session_factory() as db:
-        # ana ya estudia los martes en la tarde: el mismo horario que «calculo»
+        # ana ya estudia los martes en ese horario
         group = db.get(GrupoEstudio, data["mio"])
-        group.horarios.append(HorarioGrupo(dia_semana=1, es_manana=False))
+        group.horarios.append(HorarioGrupo(dia_semana=1, **busy))
         db.commit()
 
     results = get(client, users["ana"], "/api/sugerencias/grupos")
@@ -185,6 +206,17 @@ def test_schedule_clash_goes_last(client, users, data, session_factory):
     assert ids(results).index(data["calculo"]) > ids(results).index(data["calculo_con_peer"])
     assert "No choca con tus otros grupos" not in by_id[data["calculo"]]["motivos"]
     assert "No choca con tus otros grupos" in by_id[data["fisica"]]["motivos"]
+
+
+def test_back_to_back_schedule_does_not_clash(client, users, data, session_factory):
+    with session_factory() as db:
+        # Termina justo cuando empieza «calculo» (martes 15:00)
+        group = db.get(GrupoEstudio, data["mio"])
+        group.horarios.append(HorarioGrupo(dia_semana=1, hora_inicio=time(13), hora_fin=time(15)))
+        db.commit()
+
+    by_id = {g["id"]: g for g in get(client, users["ana"], "/api/sugerencias/grupos")}
+    assert "No choca con tus otros grupos" in by_id[data["calculo"]]["motivos"]
 
 
 def test_new_groups_are_marked(client, users, data, session_factory):

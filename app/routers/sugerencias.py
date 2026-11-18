@@ -16,7 +16,7 @@ otras asignaturas está la búsqueda sugerida.
 
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -33,7 +33,14 @@ from app.models import (
     now_utc,
     today_in_chile,
 )
-from app.routers.grupos import ACTIVE_REQUEST_STATES, is_active, matches_subject, summary_fields
+from app.routers.grupos import (
+    ACTIVE_REQUEST_STATES,
+    is_active,
+    matches_subject,
+    overlaps,
+    slot,
+    summary_fields,
+)
 from app.schemas import AsignaturaOut, AsignaturaSugeridaOut, GrupoSugeridoOut
 from app.security import current_user
 from app.text import normalize_text
@@ -64,7 +71,7 @@ class Context:
     # Usuarios de su carrera (sin él)
     peers: set[int]
     # (día, es_mañana) de los grupos donde ya participa
-    busy: set[tuple[int, bool]]
+    busy: list[tuple[int, time, time]]
     # Grupos que se le pueden sugerir: vigentes, abiertos, con cupo y sin relación con él
     available: list[GrupoEstudio] = field(default_factory=list)
 
@@ -107,7 +114,7 @@ def build_context(db: Session, user: Usuario) -> Context:
     peer_subjects = Counter(subject_id for _, subject_id in peer_pairs)
 
     my_groups = [m.grupo for m in user.membresias if is_active(m.grupo)]
-    busy = {(h.dia_semana, h.es_manana) for g in my_groups for h in g.horarios}
+    busy = [slot(h) for g in my_groups for h in g.horarios]
 
     # No se sugieren grupos donde ya está, ni donde espera respuesta o lo rechazaron
     excluded = {g.id for g in my_groups} | {
@@ -180,12 +187,13 @@ def score_group(group: GrupoEstudio, ctx: Context) -> tuple[int, list[str]] | No
     if not reasons:
         return None
 
-    slots = {(h.dia_semana, h.es_manana) for h in group.horarios}
+    slots = [slot(h) for h in group.horarios]
     if ctx.busy and slots:
-        if slots <= ctx.busy:
+        clashes = [any(overlaps(s, b) for b in ctx.busy) for s in slots]
+        if all(clashes):
             # Todos sus horarios chocan con grupos donde ya participa
             score -= PENALTY_SCHEDULE_CLASH
-        elif not slots & ctx.busy:
+        elif not any(clashes):
             reasons.append("No choca con tus otros grupos")
 
     if group.creado_en and as_utc(group.creado_en) >= now_utc() - timedelta(days=NEW_GROUP_DAYS):

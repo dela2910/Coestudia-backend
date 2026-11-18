@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
 from alembic import command
@@ -82,7 +82,7 @@ def test_migrations_match_models(engine):
 def test_create_group_with_schedule_and_member(db):
     creator = make_user(db)
     group = make_group(db, creator)
-    group.horarios.append(HorarioGrupo(dia_semana=0, es_manana=True))
+    group.horarios.append(HorarioGrupo(dia_semana=0, hora_inicio=time(9), hora_fin=time(11)))
     group.miembros.append(MiembroGrupo(usuario=creator))
     db.commit()
 
