@@ -8,7 +8,10 @@ Las señales que se usan, de más a menos importante:
 3. Sus horarios: se bajan los grupos que chocan con los grupos donde ya participa.
 
 Solo se sugieren grupos vigentes de su universidad que reciben solicitudes, tienen cupo y donde
-el usuario aún no está ni tiene una solicitud activa o rechazada.
+el usuario aún no está ni tiene una solicitud activa o rechazada. Además, el grupo tiene que tener
+relación con él: ser de una asignatura que cursa o que cursan estudiantes de su carrera, o tener
+integrantes de su carrera. Un grupo sin relación no se sugiere aunque tenga cupo: para descubrir
+otras asignaturas está la búsqueda sugerida.
 """
 
 from collections import Counter
@@ -154,8 +157,9 @@ def plural(n: int, one: str, many: str) -> str:
     return f"{n} {one if n == 1 else many}"
 
 
-def score_group(group: GrupoEstudio, ctx: Context) -> tuple[int, list[str]]:
-    """Puntaje del grupo para el usuario y los motivos que se le muestran."""
+def score_group(group: GrupoEstudio, ctx: Context) -> tuple[int, list[str]] | None:
+    """Puntaje del grupo para el usuario y los motivos que se le muestran, o None si el grupo no
+    tiene relación con él (ni por su asignatura ni por su carrera)."""
     score = 0
     reasons: list[str] = []
     subject_id = group.asignatura_id
@@ -172,6 +176,10 @@ def score_group(group: GrupoEstudio, ctx: Context) -> tuple[int, list[str]]:
         score += SCORE_PEER_MEMBER
         reasons.append(f"{plural(peer_members, 'integrante', 'integrantes')} de tu carrera")
 
+    # Horario y novedad solo ordenan: por sí solos no son motivo para sugerir un grupo
+    if not reasons:
+        return None
+
     slots = {(h.dia_semana, h.es_manana) for h in group.horarios}
     if ctx.busy and slots:
         if slots <= ctx.busy:
@@ -184,8 +192,6 @@ def score_group(group: GrupoEstudio, ctx: Context) -> tuple[int, list[str]]:
         score += SCORE_NEW
         reasons.append("Grupo nuevo")
 
-    if not reasons:
-        reasons.append("Tiene cupo en tu universidad")
     return score, reasons
 
 
@@ -195,9 +201,10 @@ def suggested_groups(
     user: Usuario = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    """Grupos sugeridos para el usuario, del más al menos relevante, con los motivos."""
+    """Grupos sugeridos para el usuario, del más al menos relevante, con los motivos. Puede
+    devolver una lista vacía si ningún grupo disponible tiene relación con él."""
     ctx = build_context(db, user)
-    scored = [(group, *score_group(group, ctx)) for group in ctx.available]
+    scored = [(group, *result) for group in ctx.available if (result := score_group(group, ctx))]
     # Con el mismo puntaje: más integrantes (más activo), después el que vence antes
     scored.sort(
         key=lambda item: (-item[1], -len(item[0].miembros), item[0].vigente_hasta, item[0].id)
