@@ -118,8 +118,7 @@ def test_suggests_my_subjects_first_then_peer_subjects(client, users, data):
         data["calculo"],
         # Física I la cursan 2 compañeros de su carrera
         data["fisica"],
-        # Sin relación con ella: al final
-        data["historia"],
+        # Historia tiene cupo, pero no tiene relación con ella: no se sugiere
     ]
     by_id = {g["id"]: g for g in results}
     assert by_id[data["calculo_con_peer"]]["motivos"][:2] == [
@@ -127,9 +126,6 @@ def test_suggests_my_subjects_first_then_peer_subjects(client, users, data):
         "1 integrante de tu carrera",
     ]
     assert by_id[data["fisica"]]["motivos"][0] == "Lo cursan 2 estudiantes de tu carrera"
-    assert by_id[data["historia"]]["motivos"] == [
-        "No choca con tus otros grupos",
-    ]
     # Mismo formato que el buscador, sin lugar ni enlace
     assert by_id[data["calculo"]]["asignatura"]["sigla"] == "MAT1620"
     assert "lugar" not in by_id[data["calculo"]]
@@ -160,7 +156,10 @@ def test_excludes_groups_with_active_or_rejected_requests(client, users, data, s
         )
         db.add(
             Solicitud(
-                grupo_id=data["historia"], usuario=ana, estado="cancelada", cancelada_en=now_utc()
+                grupo_id=data["calculo_con_peer"],
+                usuario=ana,
+                estado="cancelada",
+                cancelada_en=now_utc(),
             )
         )
         db.commit()
@@ -170,7 +169,7 @@ def test_excludes_groups_with_active_or_rejected_requests(client, users, data, s
     assert data["calculo"] not in results
     assert data["fisica"] not in results
     # La canceló: puede volver a interesarle
-    assert data["historia"] in results
+    assert data["calculo_con_peer"] in results
 
 
 def test_schedule_clash_goes_last(client, users, data, session_factory):
@@ -190,13 +189,25 @@ def test_schedule_clash_goes_last(client, users, data, session_factory):
 
 def test_new_groups_are_marked(client, users, data, session_factory):
     with session_factory() as db:
-        db.get(GrupoEstudio, data["historia"]).creado_en = now_utc()
+        db.get(GrupoEstudio, data["fisica"]).creado_en = now_utc()
         db.commit()
 
     results = get(client, users["ana"], "/api/sugerencias/grupos")
-    historia = next(g for g in results if g["id"] == data["historia"])
+    by_id = {g["id"]: g for g in results}
 
-    assert "Grupo nuevo" in historia["motivos"]
+    assert "Grupo nuevo" in by_id[data["fisica"]]["motivos"]
+    assert "Grupo nuevo" not in by_id[data["calculo"]]["motivos"]
+
+
+def test_new_group_without_relation_is_not_suggested(client, users, data, session_factory):
+    # Ser nuevo y no chocar de horario solo ordena: no basta para sugerir un grupo
+    with session_factory() as db:
+        db.get(GrupoEstudio, data["historia"]).creado_en = now_utc()
+        db.commit()
+
+    results = ids(get(client, users["ana"], "/api/sugerencias/grupos", limite=20))
+
+    assert data["historia"] not in results
 
 
 def test_limit(client, users, data):
@@ -205,11 +216,27 @@ def test_limit(client, users, data):
     assert response.status_code == 422
 
 
-def test_user_without_subjects_or_peers_gets_groups_with_spots(client, users, data):
-    # «otro» no cursa ninguna asignatura: igual recibe grupos con cupo
+def test_user_without_subjects_gets_groups_from_their_career(client, users, data):
+    # «otro» no cursa ninguna asignatura, pero sí sus compañeros de carrera
     results = get(client, users["otro"], "/api/sugerencias/grupos", limite=20)
 
-    assert set(ids(results)) >= {data["calculo"], data["historia"]}
+    # «mio» también: ahí está ana, que es de su carrera
+    assert set(ids(results)) == {
+        data["calculo"],
+        data["calculo_con_peer"],
+        data["fisica"],
+        data["mio"],
+    }
+    assert all(not g["motivos"][0].startswith("Cursas") for g in results)
+
+
+def test_user_without_subjects_or_peers_gets_no_groups(client, users, data, session_factory):
+    # Sin asignaturas ni compañeros de carrera no hay nada que sugerirle: la sección se oculta
+    with session_factory() as db:
+        db.query(Usuario).filter_by(email="otro@uc.cl").one().carrera = "Medicina"
+        db.commit()
+
+    assert get(client, users["otro"], "/api/sugerencias/grupos", limite=20) == []
 
 
 def test_suggested_subjects_without_query(client, users, data):
