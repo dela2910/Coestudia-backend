@@ -21,7 +21,10 @@ def edit_body(**fields):
         "enlace": "https://meet.google.com/abc-defg-hij",
         "cupo_maximo": 5,
         "vigente_hasta": str(today_in_chile() + timedelta(days=10)),
-        "horarios": [{"dia_semana": 0, "es_manana": True}, {"dia_semana": 1, "es_manana": False}],
+        "horarios": [
+            {"dia_semana": 0, "hora_inicio": "09:00", "hora_fin": "11:00"},
+            {"dia_semana": 1, "hora_inicio": "15:00", "hora_fin": "17:00"},
+        ],
         "abierto": True,
         **fields,
     }
@@ -53,8 +56,8 @@ def test_owner_edits_the_group(client, users):
     )
     assert body["cupo_maximo"] == 5
     assert body["horarios"] == [
-        {"dia_semana": 0, "es_manana": True},
-        {"dia_semana": 1, "es_manana": False},
+        {"dia_semana": 0, "hora_inicio": "09:00", "hora_fin": "11:00"},
+        {"dia_semana": 1, "hora_inicio": "15:00", "hora_fin": "17:00"},
     ]
     # La asignatura no cambia
     assert body["asignatura"]["sigla"] == "MAT1620"
@@ -64,11 +67,16 @@ def test_edit_can_keep_the_same_schedule(client, users):
     group_id = create_group(client, users["ana"])
 
     response = edit(
-        client, users["ana"], group_id, horarios=[{"dia_semana": 1, "es_manana": False}]
+        client,
+        users["ana"],
+        group_id,
+        horarios=[{"dia_semana": 1, "hora_inicio": "15:00", "hora_fin": "17:00"}],
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["horarios"] == [{"dia_semana": 1, "es_manana": False}]
+    assert response.json()["horarios"] == [
+        {"dia_semana": 1, "hora_inicio": "15:00", "hora_fin": "17:00"}
+    ]
 
 
 def test_only_the_owner_can_edit(client, users):

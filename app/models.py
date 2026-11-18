@@ -9,7 +9,7 @@ Los nombres de tablas y columnas siguen el diagrama, para que el código se pued
 con el modelo entregado.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
@@ -21,6 +21,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Time,
     UniqueConstraint,
     text,
 )
@@ -205,17 +206,18 @@ class HorarioGrupo(Base):
     __tablename__ = "horario_grupo"
     __table_args__ = (
         CheckConstraint("dia_semana BETWEEN 0 AND 5", name="ck_horario_dia"),
+        CheckConstraint("hora_fin > hora_inicio", name="ck_horario_rango"),
         # Para filtrar por horario en el buscador
-        Index("ix_horario_dia_bloque", "dia_semana", "es_manana"),
+        Index("ix_horario_dia_inicio", "dia_semana", "hora_inicio"),
+        Index("ix_horario_grupo", "grupo_id"),
     )
 
-    grupo_id: Mapped[int] = mapped_column(
-        ForeignKey("grupo_estudio.id", ondelete="CASCADE"), primary_key=True
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    grupo_id: Mapped[int] = mapped_column(ForeignKey("grupo_estudio.id", ondelete="CASCADE"))
     # 0 = lunes ... 5 = sábado
-    dia_semana: Mapped[int] = mapped_column(Integer, primary_key=True)
-    # true = bloque de la mañana, false = bloque de la tarde
-    es_manana: Mapped[bool] = mapped_column(Boolean, primary_key=True)
+    dia_semana: Mapped[int] = mapped_column(Integer)
+    hora_inicio: Mapped[time] = mapped_column(Time)
+    hora_fin: Mapped[time] = mapped_column(Time)
 
     grupo: Mapped[GrupoEstudio] = relationship(back_populates="horarios")
 

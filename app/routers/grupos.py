@@ -2,6 +2,7 @@
 grupos, «mis grupos», pedir unirse, administrar el grupo (CU10, RF13–15: editar, cerrar, eliminar
 y expulsar) y abandonarlo (CU11, RF16)."""
 
+from datetime import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -43,6 +44,19 @@ router = APIRouter(prefix="/api/grupos", tags=["grupos"])
 
 MAX_RESULTS = 100
 
+DAY_NAMES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado"]
+
+
+def overlaps(a: tuple[int, time, time], b: tuple[int, time, time]) -> bool:
+    """Dos horarios (día, inicio, fin) chocan si son el mismo día y se cruzan sus horas.
+    Que uno termine justo cuando empieza el otro no es choque."""
+    return a[0] == b[0] and a[1] < b[2] and b[1] < a[2]
+
+
+def slot(h) -> tuple[int, time, time]:
+    return (h.dia_semana, h.hora_inicio, h.hora_fin)
+
+
 # HORARIO_GRUPO.dia_semana: 0 = lunes ... 5 = sábado
 DayOfWeek = Annotated[int, Field(ge=0, le=5)]
 
@@ -61,10 +75,7 @@ def summary_fields(group: GrupoEstudio, members: int) -> dict:
         "miembros": members,
         "abierto": group.abierto,
         "vigente_hasta": group.vigente_hasta,
-        "horarios": [
-            HorarioOut.model_validate(h)
-            for h in sorted(group.horarios, key=lambda h: (h.dia_semana, not h.es_manana))
-        ],
+        "horarios": [HorarioOut.model_validate(h) for h in sorted(group.horarios, key=slot)],
     }
 
 
@@ -80,14 +91,22 @@ def search_groups(
     q: Annotated[str, Query(max_length=100, description="Sigla o nombre de la asignatura")] = "",
     es_online: Annotated[bool | None, Query(description="Sin valor: cualquier modalidad")] = None,
     dia: Annotated[list[DayOfWeek], Query(description="0 = lunes ... 5 = sábado")] = [],
-    es_manana: Annotated[list[bool], Query(description="true = mañana, false = tarde")] = [],
+    desde: Annotated[
+        time | None, Query(description="Horarios que terminan después de esta")
+    ] = None,
+    hasta: Annotated[time | None, Query(description="Horarios que empiezan antes de esta")] = None,
     user: Usuario = Depends(current_user),
     db: Session = Depends(get_db),
 ):
     """Grupos vigentes de la universidad del usuario; los abiertos y con cupo primero.
 
-    El día y el bloque elegidos tienen que calzar en un mismo horario del grupo.
+    El día y el rango de horas elegidos tienen que calzar en un mismo horario del grupo: basta
+    con que se crucen, no que el horario quede completo dentro del rango.
     """
+    if desde is not None and hasta is not None and desde >= hasta:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "La hora «hasta» debe ser posterior a «desde»."
+        )
     # Las asignaturas de una universidad son pocas: se filtran aquí para ignorar tildes, que
     # SQLite y PostgreSQL tratan distinto
     subjects = db.scalars(select(Asignatura).where(Asignatura.universidad == user.universidad))
@@ -123,12 +142,14 @@ def search_groups(
     )
     if es_online is not None:
         stmt = stmt.where(GrupoEstudio.es_online == es_online)
-    if dia or es_manana:
+    if dia or desde is not None or hasta is not None:
         schedule = [HorarioGrupo.grupo_id == GrupoEstudio.id]
         if dia:
             schedule.append(HorarioGrupo.dia_semana.in_(dia))
-        if es_manana:
-            schedule.append(HorarioGrupo.es_manana.in_(es_manana))
+        if desde is not None:
+            schedule.append(HorarioGrupo.hora_fin > desde)
+        if hasta is not None:
+            schedule.append(HorarioGrupo.hora_inicio < hasta)
         stmt = stmt.where(exists().where(*schedule))
 
     return [GrupoResumenOut(**summary_fields(group, total)) for group, total in db.execute(stmt)]
@@ -321,6 +342,24 @@ def check_group_details(data: GrupoIn | GrupoEditIn) -> None:
             )
     elif not data.lugar:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Escribe dónde se van a juntar.")
+    check_schedule(data.horarios)
+
+
+def check_schedule(horarios) -> None:
+    slots = sorted(slot(h) for h in horarios)
+    for day, start, end in slots:
+        if end <= start:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"El horario del {DAY_NAMES[day]} debe terminar después de empezar.",
+            )
+    # Ordenados por día e inicio, basta comparar cada horario con el siguiente
+    for a, b in zip(slots, slots[1:]):
+        if overlaps(a, b):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"Hay dos horarios del {DAY_NAMES[a[0]]} que se cruzan.",
+            )
 
 
 def apply_group_details(group: GrupoEstudio, data: GrupoIn | GrupoEditIn) -> None:
@@ -330,9 +369,10 @@ def apply_group_details(group: GrupoEstudio, data: GrupoIn | GrupoEditIn) -> Non
     group.enlace = data.enlace if data.es_online else None
     group.cupo_maximo = data.cupo_maximo
     group.vigente_hasta = data.vigente_hasta
-    # Sin repetidos: el frontend manda cada combinación de día y bloque elegidos
-    schedule = {(h.dia_semana, h.es_manana) for h in data.horarios}
-    group.horarios = [HorarioGrupo(dia_semana=d, es_manana=m) for d, m in sorted(schedule)]
+    group.horarios = [
+        HorarioGrupo(dia_semana=d, hora_inicio=start, hora_fin=end)
+        for d, start, end in sorted(slot(h) for h in data.horarios)
+    ]
 
 
 @router.put("/{grupo_id}", response_model=GrupoDetalleOut)
@@ -351,10 +391,6 @@ def update_group(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"El cupo no puede ser menor que los {len(group.miembros)} integrantes actuales.",
         )
-    # Se reemplazan los horarios: se borran los anteriores antes de insertar los nuevos, que
-    # pueden repetir la misma clave (grupo, día, bloque)
-    group.horarios = []
-    db.flush()
     apply_group_details(group, data)
     group.abierto = data.abierto
     # Si subió el cupo, las solicitudes en espera vuelven a pendiente

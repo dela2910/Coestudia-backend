@@ -13,7 +13,7 @@ def create_group(client, auth, **fields):
         "lugar": "Biblioteca",
         "cupo_maximo": 3,
         "vigente_hasta": str(today_in_chile() + timedelta(days=30)),
-        "horarios": [{"dia_semana": 1, "es_manana": False}],
+        "horarios": [{"dia_semana": 1, "hora_inicio": "15:00", "hora_fin": "17:00"}],
         **fields,
     }
     response = client.post("/api/grupos", json=body, headers=auth)

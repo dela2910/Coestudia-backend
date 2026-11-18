@@ -152,7 +152,11 @@ correos en vez de enviarlos (ver `tests/test_auth.py`).
 | `q`         | `calculo`, `mat 1620` | Sigla o nombre de la asignatura, sin importar tildes       |
 | `es_online` | `true` / `false`      | Modalidad; sin el parámetro, cualquiera                    |
 | `dia`       | `dia=0&dia=2`         | Días (0 = lunes … 5 = sábado)                              |
-| `es_manana` | `true` / `false`      | Bloque; con `dia`, ambos deben calzar en un mismo horario  |
+| `desde`     | `14:00`               | Horarios que terminan después de esa hora                  |
+| `hasta`     | `18:30`               | Horarios que empiezan antes de esa hora                    |
+
+Con `dia`, `desde` y `hasta` basta que un mismo horario del grupo calce con todos: el horario se
+tiene que cruzar con el rango, no quedar completo dentro (terminar justo a la hora `desde` no cuenta).
 
 Devuelve solo grupos no eliminados y vigentes (`vigente_hasta` desde hoy, hora de Chile), con los
 abiertos y con cupo primero. `abierto` es solo la decisión del creador: un grupo lleno sigue abierto
@@ -175,7 +179,12 @@ el mismo formato del detalle. El creador queda como primer integrante.
 | `lugar` / `enlace`  | `Biblioteca` / `https://meet.google.com/…`  | Lugar si es presencial, enlace si online |
 | `cupo_maximo`       | `4`                                         | Entre 2 y 10, incluye al creador        |
 | `vigente_hasta`     | `2026-12-04`                                | Posterior a hoy                         |
-| `horarios`          | `[{"dia_semana": 1, "es_manana": false}]`   | Al menos uno; los repetidos se ignoran  |
+| `horarios`          | ver abajo                                   | Entre 1 y 12                            |
+
+Cada horario es `{"dia_semana": 1, "hora_inicio": "15:30", "hora_fin": "17:00"}` (0 = lunes …
+5 = sábado; horas y minutos libres). El fin debe ser posterior al inicio y dos horarios del mismo día
+no se pueden cruzar (uno puede empezar justo cuando termina el otro). Las respuestas devuelven las
+horas como `"HH:MM"`.
 
 Si la sigla no existe y no viene `nombre_asignatura`, responde 404 para que el frontend pida el
 nombre (igual que en «mis asignaturas»).

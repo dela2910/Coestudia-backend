@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import time, timedelta
 
 import pytest
 
@@ -12,6 +12,19 @@ from app.models import (
     today_in_chile,
 )
 from tests.test_auth import register_and_verify
+
+
+def hours(morning: bool) -> dict:
+    """Horario de prueba: 9:00-11:00 si es de mañana, 15:00-17:00 si es de tarde."""
+    return (
+        {"hora_inicio": time(9), "hora_fin": time(11)}
+        if morning
+        else {
+            "hora_inicio": time(15),
+            "hora_fin": time(17),
+        }
+    )
+
 
 UC = "Pontificia Universidad Católica de Chile"
 
@@ -50,7 +63,7 @@ def data(session_factory, auth):
                 vigente_hasta=fields.pop("vigente_hasta", future),
                 **fields,
             )
-            g.horarios = [HorarioGrupo(dia_semana=d, es_manana=m) for d, m in schedule]
+            g.horarios = [HorarioGrupo(dia_semana=d, **hours(m)) for d, m in schedule]
             g.miembros = [MiembroGrupo(usuario=owner)]
             db.add(g)
             return g
@@ -157,17 +170,30 @@ def test_filter_by_modality(client, auth, data):
     assert data["calculo_online"] not in ids(search(client, auth, es_online=False))
 
 
-def test_filter_by_day_and_block(client, auth, data):
-    # Martes (1) en la tarde
-    assert ids(search(client, auth, dia=1, es_manana=False)) == [data["calculo_presencial"]]
+def test_filter_by_day_and_hours(client, auth, data):
+    # Martes (1) desde las 14:00: solo el de 15:00-17:00, no el cerrado de 9:00-11:00
+    assert ids(search(client, auth, dia=1, desde="14:00")) == [data["calculo_presencial"]]
     # Varios días: lunes o viernes
     assert ids(search(client, auth, dia=[0, 4])) == [data["calculo_online"], data["fisica"]]
 
 
-def test_day_and_block_must_match_the_same_schedule(client, auth, data):
-    # El grupo online es lunes mañana y miércoles tarde: lunes tarde no calza
-    assert data["calculo_online"] not in ids(search(client, auth, dia=0, es_manana=False))
-    assert data["calculo_online"] in ids(search(client, auth, dia=2, es_manana=False))
+def test_hours_only_need_to_overlap(client, auth, data):
+    # 16:00-20:00 se cruza con 15:00-17:00 aunque el grupo empiece antes
+    assert data["calculo_presencial"] in ids(search(client, auth, desde="16:00", hasta="20:00"))
+    # Terminar justo cuando empieza el rango no es cruce
+    assert data["calculo_presencial"] not in ids(search(client, auth, desde="17:00"))
+    assert data["calculo_presencial"] not in ids(search(client, auth, hasta="15:00"))
+
+
+def test_day_and_hours_must_match_the_same_schedule(client, auth, data):
+    # El grupo online es lunes 9-11 y miércoles 15-17: lunes en la tarde no calza
+    assert data["calculo_online"] not in ids(search(client, auth, dia=0, desde="14:00"))
+    assert data["calculo_online"] in ids(search(client, auth, dia=2, desde="14:00"))
+
+
+def test_rejects_inverted_hour_range(client, auth):
+    params = {"desde": "18:00", "hasta": "10:00"}
+    assert client.get("/api/grupos", params=params, headers=auth).status_code == 422
 
 
 def test_result_shape_hides_place_and_link(client, auth, data):
@@ -181,7 +207,10 @@ def test_result_shape_hides_place_and_link(client, auth, data):
         "miembros": 1,
         "abierto": True,
         "vigente_hasta": group["vigente_hasta"],
-        "horarios": [{"dia_semana": 0, "es_manana": True}, {"dia_semana": 2, "es_manana": False}],
+        "horarios": [
+            {"dia_semana": 0, "hora_inicio": "09:00", "hora_fin": "11:00"},
+            {"dia_semana": 2, "hora_inicio": "15:00", "hora_fin": "17:00"},
+        ],
     }
     assert "lugar" not in group and "enlace" not in group
 
@@ -223,7 +252,7 @@ def test_detail_of_group(client, auth, data):
     assert body["asignatura"]["sigla"] == "MAT1620"
     assert body["descripcion"] == "Integrales"
     assert (body["es_online"], body["cupo_maximo"], body["miembros"]) == (False, 4, 1)
-    assert body["horarios"] == [{"dia_semana": 1, "es_manana": False}]
+    assert body["horarios"] == [{"dia_semana": 1, "hora_inicio": "15:00", "hora_fin": "17:00"}]
     assert body["creador"] == "Ana"
     assert body["integrantes"] == [
         {"id": body["integrantes"][0]["id"], "nombre": "Ana", "carrera": None, "es_creador": True}
@@ -291,7 +320,7 @@ def new_group(**fields):
         "lugar": "Biblioteca central",
         "cupo_maximo": 4,
         "vigente_hasta": str(today_in_chile() + timedelta(days=30)),
-        "horarios": [{"dia_semana": 1, "es_manana": False}],
+        "horarios": [{"dia_semana": 1, "hora_inicio": "15:00", "hora_fin": "17:00"}],
         **fields,
     }
 
@@ -316,7 +345,9 @@ def test_create_group_with_existing_subject(client, auth, data):
 
 
 def test_created_group_appears_in_search(client, auth, data):
-    group_id = create(client, auth, horarios=[{"dia_semana": 5, "es_manana": True}]).json()["id"]
+    group_id = create(
+        client, auth, horarios=[{"dia_semana": 5, "hora_inicio": "09:00", "hora_fin": "11:00"}]
+    ).json()["id"]
 
     assert group_id in ids(search(client, auth, q="calculo", dia=5))
 
@@ -396,18 +427,46 @@ def test_online_group_keeps_only_the_link(client, auth, data):
     )
 
 
-def test_schedule_without_duplicates(client, auth, data):
+def test_schedule_is_sorted_with_free_minutes(client, auth, data):
     horarios = [
-        {"dia_semana": 3, "es_manana": False},
-        {"dia_semana": 0, "es_manana": True},
-        {"dia_semana": 3, "es_manana": False},
+        {"dia_semana": 3, "hora_inicio": "15:45", "hora_fin": "17:10"},
+        {"dia_semana": 0, "hora_inicio": "09:00:30", "hora_fin": "11:00"},
+        # El mismo día, justo después del anterior: no se cruzan
+        {"dia_semana": 3, "hora_inicio": "17:10", "hora_fin": "18:00"},
     ]
     response = create(client, auth, horarios=horarios)
 
     assert response.json()["horarios"] == [
-        {"dia_semana": 0, "es_manana": True},
-        {"dia_semana": 3, "es_manana": False},
+        {"dia_semana": 0, "hora_inicio": "09:00", "hora_fin": "11:00"},
+        {"dia_semana": 3, "hora_inicio": "15:45", "hora_fin": "17:10"},
+        {"dia_semana": 3, "hora_inicio": "17:10", "hora_fin": "18:00"},
     ]
+
+
+@pytest.mark.parametrize(
+    ("horarios", "message"),
+    [
+        (
+            [{"dia_semana": 1, "hora_inicio": "11:00", "hora_fin": "11:00"}],
+            "El horario del martes debe terminar después de empezar.",
+        ),
+        (
+            [{"dia_semana": 1, "hora_inicio": "12:00", "hora_fin": "10:00"}],
+            "El horario del martes debe terminar después de empezar.",
+        ),
+        (
+            [
+                {"dia_semana": 2, "hora_inicio": "10:00", "hora_fin": "12:00"},
+                {"dia_semana": 2, "hora_inicio": "11:30", "hora_fin": "13:00"},
+            ],
+            "Hay dos horarios del miércoles que se cruzan.",
+        ),
+    ],
+)
+def test_create_group_rejects_invalid_schedule(client, auth, data, horarios, message):
+    response = create(client, auth, horarios=horarios)
+    assert response.status_code == 422
+    assert response.json()["detail"] == message
 
 
 @pytest.mark.parametrize(
@@ -422,7 +481,8 @@ def test_schedule_without_duplicates(client, auth, data):
         {"cupo_maximo": 1},
         {"cupo_maximo": 11},
         {"horarios": []},
-        {"horarios": [{"dia_semana": 6, "es_manana": True}]},
+        {"horarios": [{"dia_semana": 6, "hora_inicio": "09:00", "hora_fin": "11:00"}]},
+        {"horarios": [{"dia_semana": 1, "hora_inicio": "25:00", "hora_fin": "26:00"}]},
         {"vigente_hasta": str(today_in_chile())},
         {"vigente_hasta": str(today_in_chile() - timedelta(days=1))},
         {"descripcion": "x" * 281},
