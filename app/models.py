@@ -9,7 +9,7 @@ Los nombres de tablas y columnas siguen el diagrama, para que el código se pued
 con el modelo entregado.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
@@ -21,6 +21,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Time,
     UniqueConstraint,
     text,
 )
@@ -168,7 +169,8 @@ class GrupoEstudio(Base):
     # Solo online
     enlace: Mapped[str | None] = mapped_column(String(500))
     cupo_maximo: Mapped[int] = mapped_column(Integer)
-    # false = cerrado (se completó el cupo o lo cerró el creador)
+    # false = el creador lo cerró y no recibe solicitudes. Que esté lleno se calcula con el cupo:
+    # un grupo lleno pero abierto deja las solicitudes nuevas en espera
     abierto: Mapped[bool] = mapped_column(Boolean, default=True)
     # Fecha que elige el creador; después de ella el grupo se elimina por vigencia
     vigente_hasta: Mapped[date] = mapped_column(Date)
@@ -195,23 +197,27 @@ class GrupoEstudio(Base):
     mensajes: Mapped[list["MensajeAsistente"]] = relationship(
         back_populates="grupo", cascade="all, delete-orphan"
     )
+    temas_foro: Mapped[list["TemaForo"]] = relationship(
+        back_populates="grupo", cascade="all, delete-orphan"
+    )
 
 
 class HorarioGrupo(Base):
     __tablename__ = "horario_grupo"
     __table_args__ = (
         CheckConstraint("dia_semana BETWEEN 0 AND 5", name="ck_horario_dia"),
+        CheckConstraint("hora_fin > hora_inicio", name="ck_horario_rango"),
         # Para filtrar por horario en el buscador
-        Index("ix_horario_dia_bloque", "dia_semana", "es_manana"),
+        Index("ix_horario_dia_inicio", "dia_semana", "hora_inicio"),
+        Index("ix_horario_grupo", "grupo_id"),
     )
 
-    grupo_id: Mapped[int] = mapped_column(
-        ForeignKey("grupo_estudio.id", ondelete="CASCADE"), primary_key=True
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    grupo_id: Mapped[int] = mapped_column(ForeignKey("grupo_estudio.id", ondelete="CASCADE"))
     # 0 = lunes ... 5 = sábado
-    dia_semana: Mapped[int] = mapped_column(Integer, primary_key=True)
-    # true = bloque de la mañana, false = bloque de la tarde
-    es_manana: Mapped[bool] = mapped_column(Boolean, primary_key=True)
+    dia_semana: Mapped[int] = mapped_column(Integer)
+    hora_inicio: Mapped[time] = mapped_column(Time)
+    hora_fin: Mapped[time] = mapped_column(Time)
 
     grupo: Mapped[GrupoEstudio] = relationship(back_populates="horarios")
 
@@ -237,9 +243,10 @@ class MiembroGrupo(Base):
 class Solicitud(Base):
     __tablename__ = "solicitud"
     __table_args__ = (
+        # en_espera: el grupo está lleno; vuelve a pendiente cuando se libera un cupo.
         # cancelada: quien la envió la retiró antes de que el creador respondiera
         CheckConstraint(
-            "estado IN ('pendiente', 'aceptada', 'rechazada', 'cancelada')",
+            "estado IN ('pendiente', 'en_espera', 'aceptada', 'rechazada', 'cancelada')",
             name="ck_solicitud_estado",
         ),
         # Las fechas de cierre calzan con el estado
@@ -251,14 +258,14 @@ class Solicitud(Base):
             "(cancelada_en IS NOT NULL) = (estado = 'cancelada')",
             name="ck_solicitud_cancelada",
         ),
-        # Una sola solicitud pendiente por usuario y grupo
+        # Una sola solicitud activa (pendiente o en espera) por usuario y grupo
         Index(
-            "uq_solicitud_pendiente",
+            "uq_solicitud_activa",
             "grupo_id",
             "usuario_id",
             unique=True,
-            sqlite_where=text("estado = 'pendiente'"),
-            postgresql_where=text("estado = 'pendiente'"),
+            sqlite_where=text("estado IN ('pendiente', 'en_espera')"),
+            postgresql_where=text("estado IN ('pendiente', 'en_espera')"),
         ),
         Index("ix_solicitud_usuario", "usuario_id"),
     )
@@ -301,18 +308,60 @@ class Archivo(Base):
     subido_por: Mapped[Usuario] = relationship()
 
 
+class TemaForo(Base):
+    """Tema del foro del grupo (B16), por ejemplo «Guía 2 – Ejercicio 3». Las respuestas quedan
+    debajo, en orden."""
+
+    __tablename__ = "tema_foro"
+    # La lista del foro se ordena por la última actividad del grupo
+    __table_args__ = (Index("ix_tema_foro_grupo", "grupo_id", "ultima_actividad_en"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    grupo_id: Mapped[int] = mapped_column(ForeignKey("grupo_estudio.id", ondelete="CASCADE"))
+    autor_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"))
+    titulo: Mapped[str] = mapped_column(String(150))
+    contenido: Mapped[str] = mapped_column(Text)
+    creado_en: Mapped[datetime] = created_at()
+    # Fecha de la última respuesta (o de la creación si no tiene)
+    ultima_actividad_en: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=now_utc)
+
+    grupo: Mapped[GrupoEstudio] = relationship(back_populates="temas_foro")
+    autor: Mapped[Usuario] = relationship()
+    respuestas: Mapped[list["RespuestaForo"]] = relationship(
+        back_populates="tema", cascade="all, delete-orphan", order_by="RespuestaForo.id"
+    )
+
+
+class RespuestaForo(Base):
+    __tablename__ = "respuesta_foro"
+    __table_args__ = (Index("ix_respuesta_foro_tema", "tema_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tema_id: Mapped[int] = mapped_column(ForeignKey("tema_foro.id", ondelete="CASCADE"))
+    autor_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"))
+    contenido: Mapped[str] = mapped_column(Text)
+    creado_en: Mapped[datetime] = created_at()
+
+    tema: Mapped[TemaForo] = relationship(back_populates="respuestas")
+    autor: Mapped[Usuario] = relationship()
+
+
 class MensajeAsistente(Base):
     __tablename__ = "mensaje_asistente"
     __table_args__ = (Index("ix_mensaje_conversacion", "grupo_id", "usuario_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     grupo_id: Mapped[int] = mapped_column(ForeignKey("grupo_estudio.id", ondelete="CASCADE"))
-    # Dueño de la conversación
+    # Quien hizo la pregunta (en las respuestas, la pregunta que responden). La conversación es
+    # del grupo: la ven todos los integrantes
     usuario_id: Mapped[int] = mapped_column(ForeignKey("usuario.id", ondelete="CASCADE"))
     # true = lo escribió el asistente, false = lo escribió el usuario
     es_asistente: Mapped[bool] = mapped_column(Boolean)
     contenido: Mapped[str] = mapped_column(Text)
     creado_en: Mapped[datetime] = created_at()
+    # Pregunta de una conversación borrada: ya no se muestra (y queda sin texto), pero sigue
+    # contando para el límite diario de preguntas de quien la hizo
+    oculto: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
     grupo: Mapped[GrupoEstudio] = relationship(back_populates="mensajes")
     usuario: Mapped[Usuario] = relationship()

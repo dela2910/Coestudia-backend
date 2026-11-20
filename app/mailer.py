@@ -84,3 +84,33 @@ def send_password_reset_email(to: str, name: str, token: str) -> None:
             f"{link}\n\nEl enlace vence en 1 hora. Si no lo pediste, ignora este correo."
         ),
     )
+
+
+def send_request_answered_email(to: str, name: str, subject: str, accepted: bool) -> None:
+    """Avisa a quien pidió unirse que el creador aceptó o rechazó su solicitud. `subject` es la
+    asignatura del grupo, ej. «MAT1620 Cálculo II»."""
+    link = frontend_url()
+    if accepted:
+        title = f"Te aceptaron en el grupo de {subject}"
+        body = (
+            "Ya eres integrante del grupo. En «Mis grupos» encuentras el lugar o el enlace de las "
+            "sesiones, los archivos y el foro del grupo."
+        )
+        action = "Ir a mis grupos"
+    else:
+        title = f"Tu solicitud al grupo de {subject} no fue aceptada"
+        body = (
+            "El creador del grupo no aceptó tu solicitud esta vez. Puedes buscar otros grupos de "
+            "la misma asignatura o crear uno."
+        )
+        action = "Buscar grupos"
+    send_email(
+        to,
+        title,
+        html=(
+            f"<p>Hola {escape(first_name(name))}:</p>"
+            f"<p><strong>{escape(title)}.</strong> {escape(body)}</p>"
+            f'<p><a href="{escape(link)}">{action}</a></p>'
+        ),
+        text=f"Hola {first_name(name)}:\n\n{title}. {body}\n\n{action}: {link}",
+    )

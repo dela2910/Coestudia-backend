@@ -1,11 +1,14 @@
 """Formato de entrada y salida de la API (Pydantic)."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer, field_validator
 
 # bcrypt usa solo los primeros 72 bytes de la contraseña
 PASSWORD_MAX_BYTES = 72
+
+# Horarios por grupo: hasta dos por día
+MAX_HORARIOS = 12
 
 
 class RegistroIn(BaseModel):
@@ -142,13 +145,26 @@ class HorarioOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     dia_semana: int
-    es_manana: bool
+    hora_inicio: time
+    hora_fin: time
+
+    @field_serializer("hora_inicio", "hora_fin")
+    def as_hour_minute(self, value: time) -> str:
+        # "15:30" en vez de "15:30:00"
+        return value.strftime("%H:%M")
 
 
 class HorarioIn(BaseModel):
     # 0 = lunes ... 5 = sábado
     dia_semana: int = Field(ge=0, le=5)
-    es_manana: bool
+    hora_inicio: time
+    hora_fin: time
+
+    @field_validator("hora_inicio", "hora_fin")
+    @classmethod
+    def only_minutes(cls, value: time) -> time:
+        # Se guardan horas y minutos; los segundos y la zona horaria no aportan
+        return value.replace(second=0, microsecond=0, tzinfo=None)
 
 
 class GrupoIn(BaseModel):
@@ -167,8 +183,23 @@ class GrupoIn(BaseModel):
     # Incluye al creador
     cupo_maximo: int = Field(ge=2, le=10)
     vigente_hasta: date
-    # 6 días x 2 bloques
-    horarios: list[HorarioIn] = Field(min_length=1, max_length=12)
+    horarios: list[HorarioIn] = Field(min_length=1, max_length=MAX_HORARIOS)
+
+
+class GrupoEditIn(BaseModel):
+    """Datos que el creador puede cambiar. La asignatura no se edita."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    descripcion: str | None = Field(default=None, max_length=280)
+    es_online: bool
+    lugar: str | None = Field(default=None, max_length=200)
+    enlace: str | None = Field(default=None, max_length=500)
+    cupo_maximo: int = Field(ge=2, le=10)
+    vigente_hasta: date
+    horarios: list[HorarioIn] = Field(min_length=1, max_length=MAX_HORARIOS)
+    # false = cerrado: no recibe solicitudes nuevas
+    abierto: bool
 
 
 class GrupoResumenOut(BaseModel):
@@ -203,6 +234,8 @@ class GrupoDetalleOut(GrupoResumenOut):
     es_miembro: bool
     # El usuario ya pidió unirse y el creador aún no responde
     solicitud_pendiente: bool
+    # La solicitud espera a que se libere un cupo
+    solicitud_en_espera: bool
     lugar: str | None
     enlace: str | None
 
@@ -226,6 +259,8 @@ class SolicitanteOut(BaseModel):
 class SolicitudOut(BaseModel):
     id: int
     usuario: SolicitanteOut
+    # pendiente | en_espera (el grupo está lleno)
+    estado: str
     mensaje: str | None
     creada_en: datetime
 
@@ -255,3 +290,105 @@ class MiSolicitudOut(BaseModel):
 class MisGruposOut(BaseModel):
     creados: list[GrupoMioOut]
     participo: list[GrupoMioOut]
+
+
+class ArchivoOut(BaseModel):
+    """Archivo compartido en el grupo. Se descarga con GET /api/archivos/{id}/descarga."""
+
+    id: int
+    nombre: str
+    tipo_mime: str
+    tamano_bytes: int
+    # Nombre de quien lo subió
+    subido_por: str
+    creado_en: datetime
+    # Lo subió el usuario o es el creador del grupo
+    puede_eliminar: bool
+
+
+class TemaForoIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    titulo: str = Field(min_length=1, max_length=150)
+    contenido: str = Field(min_length=1, max_length=5000)
+
+
+class RespuestaForoIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    contenido: str = Field(min_length=1, max_length=5000)
+
+
+class TemaResumenOut(BaseModel):
+    """Tema en la lista del foro, sin las respuestas."""
+
+    id: int
+    titulo: str
+    # Nombre de quien lo abrió
+    autor: str
+    creado_en: datetime
+    ultima_actividad_en: datetime
+    total_respuestas: int
+
+
+class RespuestaForoOut(BaseModel):
+    id: int
+    autor: str
+    # La escribió el usuario de la sesión
+    es_mia: bool
+    contenido: str
+    creado_en: datetime
+
+
+class TemaForoOut(BaseModel):
+    """Tema completo, con su pregunta y las respuestas de la más antigua a la más nueva."""
+
+    id: int
+    titulo: str
+    autor: str
+    es_mio: bool
+    contenido: str
+    creado_en: datetime
+    respuestas: list[RespuestaForoOut]
+
+
+class PreguntaAsistenteIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    contenido: str = Field(min_length=1, max_length=2000)
+
+
+class FuenteOut(BaseModel):
+    """Archivo del grupo que el asistente usó para responder."""
+
+    id: int
+    nombre: str
+
+
+class MensajeAsistenteOut(BaseModel):
+    id: int
+    # true = lo escribió el asistente, false = un integrante
+    es_asistente: bool
+    # Nombre de quien preguntó; None en las respuestas del asistente
+    autor: str | None
+    # La pregunta la hizo el usuario de la sesión
+    es_mio: bool
+    contenido: str
+    creado_en: datetime
+    fuentes: list[FuenteOut]
+
+
+class GrupoSugeridoOut(GrupoResumenOut):
+    """Grupo sugerido al usuario, con los motivos de la sugerencia (ej. «Cursas MAT1620»)."""
+
+    motivos: list[str]
+
+
+class AsignaturaSugeridaOut(BaseModel):
+    """Asignatura de la búsqueda sugerida, con los grupos que tiene disponibles para el usuario."""
+
+    asignatura: AsignaturaOut
+    # Grupos vigentes, abiertos y con cupo donde el usuario aún no está
+    grupos_disponibles: int
+    # Por qué se sugiere (ej. «Está en tus asignaturas»); None si solo calza con lo escrito
+    motivo: str | None

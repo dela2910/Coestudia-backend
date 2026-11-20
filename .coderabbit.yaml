@@ -1,0 +1,14 @@
+# Revisión automática de PRs con CodeRabbit (https://docs.coderabbit.ai/reference/configuration)
+language: es-ES
+
+reviews:
+  # chill: comenta lo importante, sin detalles de estilo que ya revisa el lint
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: false
+    # Por defecto solo revisa PRs hacia main; los PRs de features van a dev
+    base_branches:
+      - dev
