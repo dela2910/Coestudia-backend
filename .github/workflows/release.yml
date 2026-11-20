@@ -16,9 +16,38 @@ jobs:
         with:
           generate_release_notes: true
 
+  # Aplica las migraciones pendientes en la base de producción (Neon) justo antes del deploy.
+  # Si alguna falla, no se despliega: el código nuevo no queda corriendo sobre un esquema viejo.
+  migrate:
+    name: Migrar base de datos
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Aplicar migraciones
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          # Sin el secret, Alembic migraría una SQLite vacía y el job pasaría sin hacer nada
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Falta el secret DATABASE_URL"
+            exit 1
+          fi
+          alembic current
+          alembic upgrade head
+
   deploy:
     name: Deploy a Render
-    needs: release
+    needs: migrate
     runs-on: ubuntu-latest
     steps:
       - name: Disparar deploy hook de Render
