@@ -24,8 +24,11 @@ Para usar variables locales (por ejemplo la API key de Brevo), crea un `.env` co
 necesites (ver `.env.example`) y arranca con `uvicorn app.main:app --reload --env-file .env`.
 No copies `DATABASE_URL` de ejemplo: si no la defines se usa SQLite.
 
-Para trabajar contra PostgreSQL en vez de SQLite, exporta `DATABASE_URL` antes de correr
-`alembic` y `uvicorn` (ver `.env.example`).
+**No pongas la `DATABASE_URL` de producción (Neon) en tu `.env`:** el servidor local escribiría en
+la base real (usuarios, mensajes y pruebas). Las migraciones de producción las aplica el CD (ver
+«Cómo publicar una versión»). Para probar con PostgreSQL, usa una base o branch de Neon aparte y
+exporta su `DATABASE_URL` antes de correr `alembic` y `uvicorn`. Los tests (`pytest`) siempre usan
+una SQLite temporal.
 
 - http://localhost:8000/health
 - http://localhost:8000/api/hello
@@ -60,6 +63,7 @@ app/
 ├── security.py      # contraseñas, JWT, tokens de correo y current_user
 ├── rate_limit.py    # límite de intentos fallidos de login
 ├── mailer.py        # envío de correos (Brevo)
+├── storage.py       # dónde se guardan los archivos (Backblaze B2 o carpeta local)
 ├── universities.py  # universidad según el dominio del correo
 ├── text.py          # normalizar siglas y nombres (sin tildes ni espacios)
 ├── seed.py          # datos de ejemplo: python -m app.seed
@@ -68,14 +72,20 @@ app/
     ├── auth.py      # /api/auth: registro, verificación, login y /me
     ├── perfil.py    # /api/perfil: editar el perfil y «mis asignaturas»
     ├── asignaturas.py  # /api/asignaturas: catálogo para autocompletar siglas
-    ├── grupos.py    # /api/grupos: buscar, filtrar, detalle, crear, mis grupos y pedir unirse
-    └── solicitudes.py  # /api/solicitudes: mis solicitudes; aceptar o rechazar (el creador)
+    ├── grupos.py    # /api/grupos: buscar, detalle, crear, mis grupos, pedir unirse, administrar y abandonar
+    ├── solicitudes.py  # /api/solicitudes: mis solicitudes; aceptar o rechazar (el creador)
+    ├── archivos.py  # archivos del grupo: subir, listar, descargar y eliminar
+    ├── foro.py      # foro del grupo: temas y respuestas
+    └── sugerencias.py  # /api/sugerencias: grupos sugeridos y búsqueda sugerida de asignaturas
 migrations/          # migraciones de Alembic
 tests/
 ├── conftest.py      # cliente de pruebas con base SQLite y bandeja de correos
 ├── test_auth.py
 ├── test_grupos.py
 ├── test_solicitudes.py
+├── test_administrar.py
+├── test_archivos.py
+├── test_foro.py
 ├── test_hello.py
 ├── test_rate_limit.py
 ├── test_seed.py
@@ -94,6 +104,11 @@ tests/
 | `JWT_SECRET`    | Clave para firmar las sesiones. Obligatoria en producción (Render).   |
 | `BREVO_API_KEY` | API key de Brevo. Sin ella los correos se muestran en la consola.    |
 | `MAIL_FROM`     | Remitente de los correos (debe estar validado en Brevo).             |
+| `B2_BUCKET`     | Bucket de Backblaze B2 para los archivos. Sin él se usa `UPLOADS_DIR`. |
+| `B2_ENDPOINT`, `B2_KEY_ID`, `B2_APPLICATION_KEY` | Endpoint S3 y application key de B2.   |
+| `ANTHROPIC_API_KEY` | API key de Anthropic para el asistente de estudio. Sin ella responde que no está configurado. |
+| `ANTHROPIC_MODEL` | Opcional. Modelo del asistente; por defecto `claude-haiku-5-5`. |
+| `UPLOADS_DIR`   | Carpeta local para los archivos en desarrollo (por defecto `uploads`). |
 
 `http://localhost:5173` (Vite) siempre está permitido.
 
@@ -140,10 +155,15 @@ correos en vez de enviarlos (ver `tests/test_auth.py`).
 | `q`         | `calculo`, `mat 1620` | Sigla o nombre de la asignatura, sin importar tildes       |
 | `es_online` | `true` / `false`      | Modalidad; sin el parámetro, cualquiera                    |
 | `dia`       | `dia=0&dia=2`         | Días (0 = lunes … 5 = sábado)                              |
-| `es_manana` | `true` / `false`      | Bloque; con `dia`, ambos deben calzar en un mismo horario  |
+| `desde`     | `14:00`               | Horarios que terminan después de esa hora                  |
+| `hasta`     | `18:30`               | Horarios que empiezan antes de esa hora                    |
+
+Con `dia`, `desde` y `hasta` basta que un mismo horario del grupo calce con todos: el horario se
+tiene que cruzar con el rango, no quedar completo dentro (terminar justo a la hora `desde` no cuenta).
 
 Devuelve solo grupos no eliminados y vigentes (`vigente_hasta` desde hoy, hora de Chile), con los
-abiertos primero. No incluye `lugar` ni `enlace`: solo los ven los integrantes.
+abiertos y con cupo primero. `abierto` es solo la decisión del creador: un grupo lleno sigue abierto
+y las solicitudes nuevas quedan en espera. No incluye `lugar` ni `enlace`: solo los ven los integrantes.
 
 `GET /api/grupos/{id}` (requiere sesión) devuelve el detalle: lo mismo que el buscador más
 `creador`, `integrantes` (nombre, carrera y si es el creador; sin correo) y `es_miembro`. `lugar` y
@@ -162,7 +182,12 @@ el mismo formato del detalle. El creador queda como primer integrante.
 | `lugar` / `enlace`  | `Biblioteca` / `https://meet.google.com/…`  | Lugar si es presencial, enlace si online |
 | `cupo_maximo`       | `4`                                         | Entre 2 y 10, incluye al creador        |
 | `vigente_hasta`     | `2026-12-04`                                | Posterior a hoy                         |
-| `horarios`          | `[{"dia_semana": 1, "es_manana": false}]`   | Al menos uno; los repetidos se ignoran  |
+| `horarios`          | ver abajo                                   | Entre 1 y 12                            |
+
+Cada horario es `{"dia_semana": 1, "hora_inicio": "15:30", "hora_fin": "17:00"}` (0 = lunes …
+5 = sábado; horas y minutos libres). El fin debe ser posterior al inicio y dos horarios del mismo día
+no se pueden cruzar (uno puede empezar justo cuando termina el otro). Las respuestas devuelven las
+horas como `"HH:MM"`.
 
 Si la sigla no existe y no viene `nombre_asignatura`, responde 404 para que el frontend pida el
 nombre (igual que en «mis asignaturas»).
@@ -177,18 +202,88 @@ el usuario es integrante, con `lugar`, `enlace` y `es_creador`. En los que creó
 | --------------------------------------- | ------------ | ------------------------------------------------ |
 | `POST /api/grupos/{id}/solicitudes`     | Cualquiera   | Pide unirse; `{mensaje?}` opcional (201)         |
 | `DELETE /api/grupos/{id}/solicitudes`   | Quien la pidió | Cancela su solicitud pendiente                 |
-| `GET /api/solicitudes/mias`             | Quien las envió | «Mis solicitudes»: pendientes, aceptadas y rechazadas |
-| `POST /api/solicitudes/{id}/aceptar`    | Creador      | Suma al integrante; si se llena el cupo, cierra el grupo |
+| `GET /api/solicitudes/mias`             | Quien las envió | «Mis solicitudes»: pendientes, en espera, aceptadas y rechazadas |
+| `POST /api/solicitudes/{id}/aceptar`    | Creador      | Suma al integrante; si se llena el cupo, las demás quedan `en_espera` |
 | `POST /api/solicitudes/{id}/rechazar`   | Creador      | La rechaza                                       |
 
-No se puede pedir unirse a un grupo del que ya eres integrante, cerrado, sin cupo o con otra
-solicitud pendiente tuya (409). Pedir y cancelar devuelven el detalle del grupo, con
+No se puede pedir unirse a un grupo del que ya eres integrante, cerrado o con otra solicitud
+activa tuya (409).
+
+**Lista de espera.** Si el grupo está lleno, la solicitud se crea con estado `en_espera` (el
+detalle trae `solicitud_en_espera: true`). Cuando el creador acepta la que completa el cupo, las
+demás pendientes pasan a `en_espera`. Cuando se libera un cupo (alguien abandona, el creador lo
+expulsa o sube el cupo), las que estaban en espera vuelven a `pendiente`. Las en espera se pueden
+rechazar o cancelar, pero no aceptar (409). En «mis grupos» cada solicitud trae su `estado`. Pedir y cancelar devuelven el detalle del grupo, con
 `solicitud_pendiente`; aceptar y rechazar devuelven el grupo como en «mis grupos». «Mis
 solicitudes» trae solo las de grupos vigentes, las más recientes primero y sin las canceladas; el
 grupo viene como en el buscador, sin lugar ni enlace. A quien no es el
 creador, las rutas de `/api/solicitudes` le responden 404.
 
+**Aviso por correo.** Al aceptar o rechazar, se le envía un correo a quien pidió unirse
+(`send_request_answered_email` en `app/mailer.py`). Se envía en segundo plano, después de
+responderle al creador; si Brevo falla, la respuesta igual queda guardada y el error queda en el
+log. Sin `BREVO_API_KEY`, el correo se muestra en la consola del backend.
+
+### Administrar y abandonar
+
+| Método y ruta                                | Quién       | Qué hace                                       |
+| -------------------------------------------- | ----------- | ---------------------------------------------- |
+| `PUT /api/grupos/{id}`                       | Creador     | Edita los datos y `abierto` (cerrar o reabrir) |
+| `DELETE /api/grupos/{id}`                    | Creador     | Elimina el grupo (lógico) (204)                |
+| `DELETE /api/grupos/{id}/integrantes/{usuario}` | Creador  | Expulsa a un integrante                        |
+| `POST /api/grupos/{id}/abandonar`            | Integrante  | Deja el grupo (204)                            |
+
+`PUT` recibe lo mismo que crear, sin `sigla` ni `nombre_asignatura`, más `abierto`; el cupo no
+puede quedar bajo los integrantes actuales (422). Editar y expulsar devuelven el detalle del grupo.
+A quien no es el creador, las rutas de administrar le responden 403. El creador no puede
+expulsarse ni abandonar (409): para dejar el grupo, lo elimina.
+
 `app/text.py` tiene `normalize_code()` para guardar las siglas igual que se buscan (B05).
+
+### Archivos del grupo
+
+Solo los integrantes del grupo. Todas requieren sesión.
+
+| Método y ruta                         | Qué hace                                                       |
+| ------------------------------------- | -------------------------------------------------------------- |
+| `GET /api/grupos/{id}/archivos`       | Archivos del grupo, los más recientes primero                  |
+| `POST /api/grupos/{id}/archivos`      | Sube un archivo (`multipart/form-data`, campo `archivo`) (201) |
+| `GET /api/archivos/{id}/descarga`     | Descarga el archivo (siempre como adjunto)                     |
+| `DELETE /api/archivos/{id}`           | Lo elimina quien lo subió o el creador del grupo (204)         |
+
+Hasta 10 MB por archivo (413) y 100 por grupo (409). Extensiones aceptadas (otras responden 422):
+
+- Documentos: `pdf`, `doc`, `docx`, `odt`, `rtf`
+- Presentaciones: `ppt`, `pptx`, `odp`
+- Planillas: `xls`, `xlsx`, `ods`, `csv`
+- Texto: `txt`, `md`
+- Imágenes: `png`, `jpg`, `jpeg`, `gif`, `webp`, `heic`
+
+ El tipo MIME se
+deduce de la extensión. De los archivos de texto se guarda `texto_extraido` para el asistente.
+A quien no es integrante, listar y subir le responden 403, y descargar o eliminar, 404.
+
+Los archivos se guardan en Backblaze B2 si está definida `B2_BUCKET` (el disco de Render se borra
+en cada deploy); si no, en la carpeta `UPLOADS_DIR`. Para configurar B2: crear un bucket
+**privado**, una application key con acceso a ese bucket, y definir las cuatro variables `B2_*`
+en Render (el endpoint aparece en el detalle del bucket, ej. `https://s3.us-west-004.backblazeb2.com`).
+
+### Foro del grupo
+
+Temas con su pregunta (por ejemplo «Guía 2 – Ejercicio 3») y las respuestas debajo, en orden. Solo
+los integrantes del grupo. Todas requieren sesión.
+
+| Método y ruta                         | Qué hace                                                       |
+| ------------------------------------- | -------------------------------------------------------------- |
+| `GET /api/grupos/{id}/foro`           | Temas del grupo, primero los de actividad más reciente         |
+| `POST /api/grupos/{id}/foro`          | Abre un tema: `{titulo, contenido}` (201)                      |
+| `GET /api/foro/{id}`                  | El tema con todas sus respuestas                               |
+| `POST /api/foro/{id}/respuestas`      | Responde el tema: `{contenido}` (201); el tema sube en la lista |
+
+Título de hasta 150 caracteres y textos de hasta 5000 (422 si no). A quien no es integrante, la
+lista y abrir un tema le responden 403, y ver o responder un tema, 404. Lo que escribió quien deja
+el grupo se conserva. No hay consultas periódicas: el frontend carga el foro al abrirlo y con el
+botón «Actualizar», para no mantener despierta la base de datos (capa gratuita de Neon).
 
 ## Perfil y mis asignaturas
 
@@ -255,6 +350,9 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-El workflow `release.yml` crea el release en GitHub con notas autogeneradas y luego dispara el
-deploy en Render mediante el secret `RENDER_DEPLOY_HOOK`. Usar versionado semántico
+El workflow `release.yml` tiene tres etapas: `Crear release` (release en GitHub con notas
+autogeneradas) → `Migrar base de datos` (`alembic upgrade head` en Neon con el secret
+`DATABASE_URL`) → `Deploy a Render` (deploy hook del secret `RENDER_DEPLOY_HOOK`). Si una migración
+falla, no se despliega. Las migraciones deben ser compatibles con la versión anterior por un rato:
+se aplican antes de que Render termine de levantar el código nuevo. Usar versionado semántico
 (`vMAYOR.MENOR.PARCHE`).
