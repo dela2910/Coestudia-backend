@@ -363,6 +363,15 @@ class FuenteOut(BaseModel):
 
     id: int
     nombre: str
+    # Dónde lo citó, por ejemplo «pág. 4» o «diap. 2, 5». None si no se sabe
+    ubicacion: str | None = None
+
+
+class LimiteAsistenteOut(BaseModel):
+    """Preguntas al asistente que le quedan al usuario en las últimas 24 horas."""
+
+    restantes: int
+    maximo: int
 
 
 class MensajeAsistenteOut(BaseModel):
@@ -376,6 +385,8 @@ class MensajeAsistenteOut(BaseModel):
     contenido: str
     creado_en: datetime
     fuentes: list[FuenteOut]
+    # Aviso bajo la respuesta del asistente, aparte de su contenido
+    aviso: str | None = None
 
 
 class GrupoSugeridoOut(GrupoResumenOut):
