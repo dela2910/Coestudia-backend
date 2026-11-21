@@ -14,6 +14,7 @@ import base64
 import io
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -26,9 +27,9 @@ from sqlalchemy.orm import Session
 from app.claude import get_claude, model_name
 from app.db import get_db
 from app.extract import EXTRACTABLE_EXTENSIONS, extract_text
-from app.models import Archivo, GrupoEstudio, MensajeAsistente, Usuario, now_utc
+from app.models import Archivo, FuenteMensaje, GrupoEstudio, MensajeAsistente, Usuario, now_utc
 from app.routers.archivos import extension, member_group
-from app.schemas import FuenteOut, MensajeAsistenteOut, PreguntaAsistenteIn
+from app.schemas import FuenteOut, LimiteAsistenteOut, MensajeAsistenteOut, PreguntaAsistenteIn
 from app.security import as_utc, current_user
 from app.storage import MissingFileError, get_storage
 
@@ -109,13 +110,14 @@ def recent_questions(db: Session, user: Usuario) -> list[MensajeAsistente]:
     ).all()
 
 
+def questions_today(db: Session, user: Usuario) -> int:
+    """Preguntas que cuentan para el límite hechas en las últimas 24 horas."""
+    since = now_utc() - timedelta(hours=24)
+    return sum(as_utc(q.creado_en) > since for q in recent_questions(db, user))
+
+
 def check_daily_limit(db: Session, user: Usuario) -> None:
-    questions = recent_questions(db, user)
-    if len(questions) < MAX_QUESTIONS_PER_DAY:
-        return
-    # La más antigua de las últimas MAX preguntas define cuándo se libera un cupo
-    oldest = as_utc(questions[-1].creado_en)
-    if now_utc() - oldest < timedelta(hours=24):
+    if questions_today(db, user) >= MAX_QUESTIONS_PER_DAY:
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
             f"Llegaste al máximo de {MAX_QUESTIONS_PER_DAY} preguntas al asistente en 24 horas. "
@@ -176,7 +178,10 @@ def message_out(message: MensajeAsistente, user: Usuario) -> MensajeAsistenteOut
         es_mio=not message.es_asistente and message.usuario_id == user.id,
         contenido=message.contenido,
         creado_en=message.creado_en,
-        fuentes=[FuenteOut(id=f.id, nombre=f.nombre) for f in message.fuentes],
+        fuentes=[
+            FuenteOut(id=c.archivo.id, nombre=c.archivo.nombre, ubicacion=c.ubicacion)
+            for c in message.citas
+        ],
         aviso=message.aviso,
     )
 
@@ -365,25 +370,74 @@ def claude_error_detail(error: anthropic.APIError) -> str:
     return "El asistente no está disponible en este momento. Intenta más tarde."
 
 
-def reply_text_and_sources(response, files: list[Archivo]) -> tuple[str, list[Archivo]]:
-    """Texto de la respuesta y los archivos que citó, sin repetir y en orden de aparición."""
+# Marcas que deja la extracción de texto al inicio de cada página o diapositiva (app/extract.py)
+PAGE_MARK = re.compile(r"\[(Página|Diapositiva) (\d+)\]")
+# Páginas que se muestran por fuente; si citó más, se agrega «…»
+MAX_PAGES_SHOWN = 6
+
+
+def cited_pages(item: Material, citation) -> tuple[str, list[int]]:
+    """Tipo de ubicación («pág.» o «diap.») y páginas de una cita. Sin páginas si no se sabe."""
+    if getattr(citation, "type", None) == "page_location":
+        # Un PDF que Claude leyó como imágenes: end_page_number es exclusivo
+        start = citation.start_page_number
+        end = max(getattr(citation, "end_page_number", start + 1), start + 1)
+        return "pág.", list(range(start, end))
+    start = getattr(citation, "start_char_index", None)
+    if getattr(citation, "type", None) != "char_location" or start is None or not item.text:
+        return "pág.", []
+    # Texto extraído: la página es la de la última marca antes de lo citado
+    marks = [m for m in PAGE_MARK.finditer(item.text) if m.start() <= start]
+    if not marks:
+        return "pág.", []
+    kind = "diap." if marks[-1][1] == "Diapositiva" else "pág."
+    return kind, [int(marks[-1][2])]
+
+
+def location_label(kind: str, pages: set[int]) -> str | None:
+    """Por ejemplo «pág. 4», «págs. 4, 7» o «diap. 2, 5»."""
+    if not pages:
+        return None
+    numbers = sorted(pages)
+    shown = ", ".join(str(n) for n in numbers[:MAX_PAGES_SHOWN])
+    if len(numbers) > MAX_PAGES_SHOWN:
+        shown += "…"
+    if kind == "pág." and len(numbers) > 1:
+        kind = "págs."
+    return f"{kind} {shown}"
+
+
+def reply_text_and_sources(
+    response, material: list[Material]
+) -> tuple[str, list[tuple[Archivo, str | None]]]:
+    """Texto de la respuesta y los archivos que citó con dónde los citó, sin repetir y en orden
+    de aparición."""
     if response.stop_reason == "refusal":
         return "No puedo ayudarte con eso. Pregúntame sobre el material del grupo.", []
 
-    parts, sources = [], []
+    parts = []
+    # Índice del documento → (tipo de ubicación, páginas citadas), en orden de aparición
+    cited: dict[int, tuple[str, set[int]]] = {}
     for block in response.content:
         if block.type != "text":
             continue
         parts.append(block.text)
         for citation in block.citations or []:
             index = getattr(citation, "document_index", None)
-            if index is not None and index < len(files) and files[index] not in sources:
-                sources.append(files[index])
+            if index is None or index >= len(material):
+                continue
+            kind, pages = cited_pages(material[index], citation)
+            previous_kind, previous = cited.get(index, (kind, set()))
+            cited[index] = (previous_kind, previous | set(pages))
     text = "".join(parts).strip()
     if response.stop_reason == "max_tokens":
         text += (
             "\n\n(La respuesta quedó cortada por su largo. Pídeme que siga o que sea más breve.)"
         )
+    sources = [
+        (material[index].file, location_label(kind, pages))
+        for index, (kind, pages) in cited.items()
+    ]
     return text or "No encontré qué responder. ¿Puedes reformular la pregunta?", sources
 
 
@@ -397,12 +451,12 @@ def save_reply(
     group_id: int,
     user: Usuario,
     text: str,
-    sources: list[Archivo],
+    sources: list[tuple[Archivo, str | None]],
     notice: str | None,
 ) -> MensajeAsistenteOut:
     # Se usan ids y se vuelven a cargar los archivos: la respuesta se guarda al terminar el
     # stream, cuando los objetos de la petición pueden haber quedado fuera de la sesión
-    ids = [f.id for f in sources]
+    ids = [f.id for f, _ in sources]
     by_id = {f.id: f for f in db.scalars(select(Archivo).where(Archivo.id.in_(ids)))}
     reply = MensajeAsistente(
         grupo_id=group_id,
@@ -410,7 +464,11 @@ def save_reply(
         es_asistente=True,
         contenido=text,
         aviso=notice,
-        fuentes=[by_id[i] for i in ids if i in by_id],
+        citas=[
+            FuenteMensaje(archivo=by_id[f.id], orden=position, ubicacion=location)
+            for position, (f, location) in enumerate(sources)
+            if f.id in by_id
+        ],
     )
     db.add(reply)
     db.commit()
@@ -424,7 +482,7 @@ def stream_answer(
     question_id: int,
     group_id: int,
     user: Usuario,
-    files: list[Archivo],
+    material: list[Material],
     notice: str | None,
 ):
     """Eventos de la respuesta: «texto» con cada parte mientras Claude escribe, y al final «listo»
@@ -445,7 +503,7 @@ def stream_answer(
             yield sse("error", {"detail": claude_error_detail(error)})
             return
 
-        text, sources = reply_text_and_sources(response, files)
+        text, sources = reply_text_and_sources(response, material)
         logger.info(
             "Asistente grupo=%s tokens entrada=%s caché leído=%s caché escrito=%s salida=%s",
             group_id,
@@ -480,6 +538,14 @@ def event_stream(events) -> StreamingResponse:
 
 
 # --- Endpoints ---
+
+
+@router.get("/api/asistente/limite", response_model=LimiteAsistenteOut)
+def daily_limit(user: Usuario = Depends(current_user), db: Session = Depends(get_db)):
+    """Preguntas al asistente que le quedan al usuario hoy (en las últimas 24 horas, en todos sus
+    grupos)."""
+    remaining = max(MAX_QUESTIONS_PER_DAY - questions_today(db, user), 0)
+    return LimiteAsistenteOut(restantes=remaining, maximo=MAX_QUESTIONS_PER_DAY)
 
 
 @router.get("/api/grupos/{grupo_id}/asistente", response_model=list[MensajeAsistenteOut])
@@ -534,9 +600,8 @@ def ask(
         # Esfuerzo bajo: respuestas de estudio no necesitan razonamiento largo y cuesta menos
         "output_config": {"effort": "low"},
     }
-    files = [item.file for item in material]
     return event_stream(
-        stream_answer(db, client, request, question.id, group.id, user, files, notice)
+        stream_answer(db, client, request, question.id, group.id, user, material, notice)
     )
 
 

@@ -309,7 +309,7 @@ class Archivo(Base):
 
 
 class TemaForo(Base):
-    """Tema del foro del grupo (B16), por ejemplo «Guía 2 – Ejercicio 3». Las respuestas quedan
+    """Tema del foro del grupo (B14), por ejemplo «Guía 2 – Ejercicio 3». Las respuestas quedan
     debajo, en orden."""
 
     __tablename__ = "tema_foro"
@@ -373,8 +373,10 @@ class MensajeAsistente(Base):
 
     grupo: Mapped[GrupoEstudio] = relationship(back_populates="mensajes")
     usuario: Mapped[Usuario] = relationship()
-    # Archivos que el asistente citó en esta respuesta
-    fuentes: Mapped[list[Archivo]] = relationship(secondary="fuente_mensaje")
+    # Archivos que el asistente citó en esta respuesta, en orden de aparición
+    citas: Mapped[list["FuenteMensaje"]] = relationship(
+        cascade="all, delete-orphan", order_by="FuenteMensaje.orden"
+    )
 
 
 class FuenteMensaje(Base):
@@ -386,3 +388,9 @@ class FuenteMensaje(Base):
     archivo_id: Mapped[int] = mapped_column(
         ForeignKey("archivo.id", ondelete="CASCADE"), primary_key=True
     )
+    # Posición entre las fuentes de la respuesta (en orden de aparición)
+    orden: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # Dónde citó el archivo, por ejemplo «pág. 4» o «diap. 2, 5». None si no se sabe (un .txt)
+    ubicacion: Mapped[str | None] = mapped_column(Text)
+
+    archivo: Mapped[Archivo] = relationship()

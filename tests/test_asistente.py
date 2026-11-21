@@ -28,6 +28,13 @@ def api_error(status_code=400):
     )
 
 
+def citation(cited):
+    """Una cita: el índice del documento (cita de texto al comienzo) o la cita misma."""
+    if isinstance(cited, int):
+        return SimpleNamespace(type="char_location", document_index=cited, start_char_index=0)
+    return cited
+
+
 class FakeStream:
     def __init__(self, fake):
         self.fake = fake
@@ -52,7 +59,7 @@ class FakeStream:
             SimpleNamespace(
                 type="text",
                 text=text,
-                citations=[SimpleNamespace(type="char_location", document_index=i) for i in cited],
+                citations=[citation(c) for c in cited],
             )
             for text, cited in self.fake.blocks
         ]
@@ -122,6 +129,18 @@ def history(client, auth, group_id) -> list[dict]:
 
 def notes(client, auth, group_id, name="apuntes.txt", text="Integrales por partes: u dv."):
     return upload(client, auth, group_id, name=name, content=text.encode())
+
+
+def char_citation(index, start):
+    return SimpleNamespace(type="char_location", document_index=index, start_char_index=start)
+
+
+def ask_and_document(client, users, group, claude) -> str:
+    """Hace una pregunta y devuelve el texto del primer documento que se le mandó a Claude."""
+    ask(client, users["ana"], group)
+    data = claude.calls[-1]["messages"][0]["content"][0]["source"]["data"]
+    client.delete(f"/api/grupos/{group}/asistente", headers=users["ana"])
+    return data
 
 
 def question_text(message) -> str:
@@ -288,6 +307,67 @@ def test_sources_are_the_cited_files_without_repeats(client, users, group, claud
 
     assert answer["contenido"] == "Primero y luego fin."
     assert [f["nombre"] for f in answer["fuentes"]] == ["b.txt", "a.txt"]
+
+
+def test_sources_say_the_cited_page_of_text_pdfs(client, users, group, claude):
+    pdf = make_pdf(["Introduccion", "Series de Taylor", "Ejercicios"])
+    upload(client, users["ana"], group, name="guia.pdf", content=pdf)
+    data = ask_and_document(client, users, group, claude)
+    claude.blocks = [
+        ("Según la guía…", [char_citation(0, data.index("Series")), char_citation(0, 0)]),
+    ]
+
+    answer = reply(ask(client, users["ana"], group))
+
+    assert answer["fuentes"] == [
+        {"id": answer["fuentes"][0]["id"], "nombre": "guia.pdf", "ubicacion": "págs. 1, 2"}
+    ]
+
+
+def test_sources_say_the_cited_slide(client, users, group, claude, session_factory):
+    notes(client, users["ana"], group, name="clase.pptx")
+    with session_factory() as db:
+        db.query(Archivo).one().texto_extraido = "[Diapositiva 1]\nIntro\n\n[Diapositiva 2]\nTaylor"
+        db.commit()
+    claude.blocks = [("Taylor.", [char_citation(0, 40)])]
+
+    answer = reply(ask(client, users["ana"], group))
+
+    assert answer["fuentes"][0]["ubicacion"] == "diap. 2"
+
+
+def test_sources_say_the_cited_pages_of_scanned_pdfs(client, users, group, claude):
+    upload(client, users["ana"], group, name="escaneado.pdf", content=make_pdf([""] * 5))
+    claude.blocks = [
+        (
+            "Está en el apunte.",
+            [
+                SimpleNamespace(
+                    type="page_location", document_index=0, start_page_number=3, end_page_number=5
+                )
+            ],
+        )
+    ]
+
+    answer = reply(ask(client, users["ana"], group))
+
+    assert answer["fuentes"][0]["ubicacion"] == "págs. 3, 4"
+    # Se guarda: se ve igual al volver a abrir la conversación
+    assert history(client, users["ana"], group)[1]["fuentes"][0]["ubicacion"] == "págs. 3, 4"
+
+
+def test_files_without_pages_have_no_location(client, users, group, claude):
+    notes(client, users["ana"], group)
+
+    answer = reply(ask(client, users["ana"], group))
+
+    assert answer["fuentes"][0]["ubicacion"] is None
+
+
+def test_many_pages_are_shortened():
+    assert asistente.location_label("pág.", set(range(1, 10))) == "págs. 1, 2, 3, 4, 5, 6…"
+    assert asistente.location_label("pág.", {4}) == "pág. 4"
+    assert asistente.location_label("pág.", set()) is None
 
 
 def test_cut_answer_is_marked(client, users, group, claude):
@@ -517,6 +597,19 @@ def test_clearing_the_conversation_does_not_reset_the_daily_limit(
 
     assert history(client, users["ana"], group) == []
     assert ask(client, users["ana"], group).status_code == 429
+
+
+def test_remaining_questions_today(client, users, group, claude, monkeypatch):
+    monkeypatch.setattr(asistente, "MAX_QUESTIONS_PER_DAY", 3)
+    # Sin material no cuenta
+    ask(client, users["ana"], group)
+    notes(client, users["ana"], group)
+    ask(client, users["ana"], group)
+
+    response = client.get("/api/asistente/limite", headers=users["ana"])
+
+    assert response.json() == {"restantes": 2, "maximo": 3}
+    assert client.get("/api/asistente/limite", headers=users["luis"]).json()["restantes"] == 3
 
 
 @pytest.mark.parametrize("text", ["", "   ", "x" * 2001])
