@@ -376,6 +376,8 @@ class MensajeAsistenteOut(BaseModel):
     contenido: str
     creado_en: datetime
     fuentes: list[FuenteOut]
+    # Aviso bajo la respuesta del asistente, aparte de su contenido
+    aviso: str | None = None
 
 
 class GrupoSugeridoOut(GrupoResumenOut):

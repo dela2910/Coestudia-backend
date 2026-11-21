@@ -352,8 +352,8 @@ class MensajeAsistente(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     grupo_id: Mapped[int] = mapped_column(ForeignKey("grupo_estudio.id", ondelete="CASCADE"))
-    # Quien hizo la pregunta (en las respuestas, la pregunta que responden). La conversación es
-    # del grupo: la ven todos los integrantes
+    # Dueño de la conversación: quien hizo la pregunta (en las respuestas, la pregunta que
+    # responden). Cada integrante tiene su propia conversación con el asistente del grupo
     usuario_id: Mapped[int] = mapped_column(ForeignKey("usuario.id", ondelete="CASCADE"))
     # true = lo escribió el asistente, false = lo escribió el usuario
     es_asistente: Mapped[bool] = mapped_column(Boolean)
@@ -362,6 +362,14 @@ class MensajeAsistente(Base):
     # Pregunta de una conversación borrada: ya no se muestra (y queda sin texto), pero sigue
     # contando para el límite diario de preguntas de quien la hizo
     oculto: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # Pregunta que cuenta para el límite diario. Las que se responden sin llamar a Claude (el grupo
+    # no tiene material) no cuentan
+    cuenta_limite: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true")
+    )
+    # Aviso del sistema bajo una respuesta (por ejemplo, material que no alcanzó a leer). Se
+    # muestra aparte y no se reenvía a Claude como parte de la conversación
+    aviso: Mapped[str | None] = mapped_column(Text)
 
     grupo: Mapped[GrupoEstudio] = relationship(back_populates="mensajes")
     usuario: Mapped[Usuario] = relationship()
