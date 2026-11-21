@@ -1,4 +1,4 @@
-"""Foro del grupo (B16): temas con su pregunta, por ejemplo «Guía 2 – Ejercicio 3», y respuestas
+"""Foro del grupo (B14): temas con su pregunta, por ejemplo «Guía 2 – Ejercicio 3», y respuestas
 debajo en orden. Solo los integrantes leen y escriben.
 
 No hay consultas periódicas: el frontend carga el foro al abrirlo y con el botón «Actualizar», así
