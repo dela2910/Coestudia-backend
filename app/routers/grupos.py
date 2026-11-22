@@ -32,6 +32,7 @@ from app.schemas import (
     GrupoResumenOut,
     HorarioOut,
     IntegranteOut,
+    InvitacionOut,
     MisGruposOut,
     SolicitanteOut,
     SolicitudIn,
@@ -253,6 +254,11 @@ def request_to_join(
         raise HTTPException(status.HTTP_409_CONFLICT, "Ya eres integrante de este grupo.")
     if active_request(group, user.id) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Ya enviaste una solicitud a este grupo.")
+    if any(i.usuario_id == user.id and i.estado == "pendiente" for i in group.invitaciones):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Ya te invitaron a este grupo: acepta la invitación en «Mis solicitudes».",
+        )
     if not group.abierto:
         raise HTTPException(status.HTTP_409_CONFLICT, "Este grupo está cerrado.")
 
@@ -483,12 +489,20 @@ def detail_out(group: GrupoEstudio, user: Usuario) -> GrupoDetalleOut:
 
 def mine_out(group: GrupoEstudio, user: Usuario) -> GrupoMioOut:
     """Grupo de «mis grupos». Solo el creador ve las solicitudes pendientes y en espera, las más
-    antiguas primero (el orden de la lista de espera)."""
+    antiguas primero (el orden de la lista de espera), y las invitaciones que aún no responden."""
     is_owner = group.creador_id == user.id
     pending = (
         sorted(
             (s for s in group.solicitudes if s.estado in ACTIVE_REQUEST_STATES),
             key=lambda s: (s.creada_en, s.id),
+        )
+        if is_owner
+        else []
+    )
+    invitations = (
+        sorted(
+            (i for i in group.invitaciones if i.estado == "pendiente"),
+            key=lambda i: (i.creada_en, i.id),
         )
         if is_owner
         else []
@@ -507,5 +521,11 @@ def mine_out(group: GrupoEstudio, user: Usuario) -> GrupoMioOut:
                 creada_en=s.creada_en,
             )
             for s in pending
+        ],
+        invitaciones=[
+            InvitacionOut(
+                id=i.id, usuario=SolicitanteOut.model_validate(i.usuario), creada_en=i.creada_en
+            )
+            for i in invitations
         ],
     )

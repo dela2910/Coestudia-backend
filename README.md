@@ -74,6 +74,7 @@ app/
     ├── asignaturas.py  # /api/asignaturas: catálogo para autocompletar siglas
     ├── grupos.py    # /api/grupos: buscar, detalle, crear, mis grupos, pedir unirse, administrar y abandonar
     ├── solicitudes.py  # /api/solicitudes: mis solicitudes; aceptar o rechazar (el creador)
+    ├── invitaciones.py # invitar por correo (el creador); aceptar o rechazar (el invitado)
     ├── archivos.py  # archivos del grupo: subir, listar, descargar y eliminar
     ├── foro.py      # foro del grupo: temas y respuestas
     └── sugerencias.py  # /api/sugerencias: grupos sugeridos y búsqueda sugerida de asignaturas
@@ -83,6 +84,7 @@ tests/
 ├── test_auth.py
 ├── test_grupos.py
 ├── test_solicitudes.py
+├── test_invitaciones.py
 ├── test_administrar.py
 ├── test_archivos.py
 ├── test_foro.py
@@ -194,7 +196,8 @@ nombre (igual que en «mis asignaturas»).
 
 `GET /api/grupos/mios` (requiere sesión) devuelve `{creados, participo}`: los grupos vigentes donde
 el usuario es integrante, con `lugar`, `enlace` y `es_creador`. En los que creó vienen además las
-`solicitudes` pendientes (quién la envió, su carrera y el mensaje).
+`solicitudes` pendientes (quién la envió, su carrera y el mensaje) y las `invitaciones` que aún no
+responden.
 
 ### Solicitudes para unirse
 
@@ -223,6 +226,30 @@ creador, las rutas de `/api/solicitudes` le responden 404.
 (`send_request_answered_email` en `app/mailer.py`). Se envía en segundo plano, después de
 responderle al creador; si Brevo falla, la respuesta igual queda guardada y el error queda en el
 log. Sin `BREVO_API_KEY`, el correo se muestra en la consola del backend.
+
+### Invitaciones
+
+| Método y ruta                                     | Quién      | Qué hace                                  |
+| ------------------------------------------------- | ---------- | ----------------------------------------- |
+| `POST /api/grupos/{id}/invitaciones`              | Creador    | Invita por correo; `{email}` (201)        |
+| `DELETE /api/grupos/{id}/invitaciones/{inv}`      | Creador    | Cancela una invitación pendiente          |
+| `GET /api/invitaciones/mias`                      | Invitado   | Invitaciones pendientes que recibió       |
+| `POST /api/invitaciones/{inv}/aceptar`            | Invitado   | Entra al grupo                            |
+| `POST /api/invitaciones/{inv}/rechazar`           | Invitado   | La rechaza (204)                          |
+
+Es lo contrario de una solicitud: el creador invita a un compañero con su correo institucional y
+el invitado decide. Solo se puede invitar a una cuenta verificada de la misma universidad (si no,
+404), que no sea integrante, sin otra invitación pendiente ni una solicitud activa a ese grupo (409:
+en ese caso basta con aceptar su solicitud). Se puede invitar aunque el grupo esté cerrado a
+solicitudes, pero no si está lleno. Quien tiene una invitación pendiente no puede además pedir
+unirse (409).
+
+Aceptar suma al invitado como integrante, con el mismo bloqueo del grupo que al aceptar una
+solicitud, para no pasar del cupo. Si el grupo se llenó entre medio, responde 409 y la invitación
+sigue pendiente. Si con el nuevo integrante se completa el cupo, las solicitudes pendientes pasan a
+`en_espera`. Al invitar se le avisa por correo (`send_invitation_email`), en segundo plano como el
+aviso de las solicitudes. A quien no es el invitado, las rutas de `/api/invitaciones` le responden
+404.
 
 ### Administrar y abandonar
 
