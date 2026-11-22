@@ -17,9 +17,10 @@ from app.routers.grupos import (
     is_full,
     membership,
     mine_out,
+    notify_full,
     own_group,
+    reject_if_full,
     summary_fields,
-    sync_waitlist,
 )
 from app.routers.solicitudes import lock_group
 from app.schemas import GrupoMioOut, GrupoResumenOut, InvitacionIn, MiInvitacionOut
@@ -150,10 +151,13 @@ def my_pending_invitation(db: Session, invitacion_id: int, user: Usuario) -> Inv
 
 @router.post("/api/invitaciones/{invitacion_id}/aceptar", response_model=GrupoMioOut)
 def accept_invitation(
-    invitacion_id: int, user: Usuario = Depends(current_user), db: Session = Depends(get_db)
+    invitacion_id: int,
+    tasks: BackgroundTasks,
+    user: Usuario = Depends(current_user),
+    db: Session = Depends(get_db),
 ):
-    """El invitado entra al grupo. Si con eso se llena el cupo, las solicitudes pendientes quedan
-    en espera hasta que se libere uno."""
+    """El invitado entra al grupo. Si con eso se llena el cupo, las solicitudes pendientes se
+    rechazan solas y se les avisa por correo."""
     invitation = my_pending_invitation(db, invitacion_id, user)
     group = invitation.grupo
     # Igual que al aceptar una solicitud: dos ingresos a la vez no pueden pasar del cupo
@@ -172,8 +176,9 @@ def accept_invitation(
     invitation.estado = "aceptada"
     invitation.respondida_en = now_utc()
     group.miembros.append(MiembroGrupo(usuario_id=user.id))
-    sync_waitlist(group)
+    rejected = reject_if_full(group)
     db.commit()
+    notify_full(tasks, rejected)
     db.refresh(group)
     return mine_out(group, user)
 

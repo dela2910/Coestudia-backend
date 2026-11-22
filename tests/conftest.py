@@ -73,7 +73,19 @@ def invitation_outbox(monkeypatch):
 
 
 @pytest.fixture
-def client(session_factory, outbox, answer_outbox, invitation_outbox):
+def full_outbox(monkeypatch):
+    """Avisos de rechazo automático (el grupo se llenó) que la API habría enviado:
+    (destinatario, nombre, asignatura)."""
+    sent = []
+    monkeypatch.setattr(
+        "app.routers.grupos.send_group_full_email",
+        lambda to, name, subject: sent.append((to, name, subject)),
+    )
+    return sent
+
+
+@pytest.fixture
+def client(session_factory, outbox, answer_outbox, invitation_outbox, full_outbox):
     def override_get_db():
         with session_factory() as session:
             yield session

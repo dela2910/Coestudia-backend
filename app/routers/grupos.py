@@ -2,16 +2,18 @@
 grupos, «mis grupos», pedir unirse, administrar el grupo (CU10, RF13–15: editar, cerrar, eliminar
 y expulsar) y abandonarlo (CU11, RF16)."""
 
+import logging
 from datetime import time
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import Field
 from sqlalchemy import and_, exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
+from app.mailer import send_group_full_email
 from app.models import (
     Asignatura,
     GrupoEstudio,
@@ -41,6 +43,8 @@ from app.schemas import (
 from app.security import current_user
 from app.text import normalize_code, normalize_text
 
+logger = logging.getLogger("coestudia.grupos")
+
 router = APIRouter(prefix="/api/grupos", tags=["grupos"])
 
 MAX_RESULTS = 100
@@ -60,9 +64,6 @@ def slot(h) -> tuple[int, time, time]:
 
 # HORARIO_GRUPO.dia_semana: 0 = lunes ... 5 = sábado
 DayOfWeek = Annotated[int, Field(ge=0, le=5)]
-
-# Solicitudes que esperan respuesta del creador. en_espera: el grupo está lleno
-ACTIVE_REQUEST_STATES = ("pendiente", "en_espera")
 
 
 def summary_fields(group: GrupoEstudio, members: int) -> dict:
@@ -177,26 +178,42 @@ def is_full(group: GrupoEstudio) -> bool:
 
 
 def active_request(group: GrupoEstudio, user_id: int) -> Solicitud | None:
-    """Solicitud del usuario que espera respuesta (pendiente o en espera)."""
+    """Solicitud del usuario que espera respuesta del creador."""
     return next(
-        (
-            s
-            for s in group.solicitudes
-            if s.usuario_id == user_id and s.estado in ACTIVE_REQUEST_STATES
-        ),
+        (s for s in group.solicitudes if s.usuario_id == user_id and s.estado == "pendiente"),
         None,
     )
 
 
-def sync_waitlist(group: GrupoEstudio) -> None:
-    """Con el grupo lleno, las solicitudes pendientes quedan en espera; cuando se libera un cupo
-    (alguien sale o sube el cupo) vuelven a pendiente para que el creador las responda."""
-    full = is_full(group)
-    for s in group.solicitudes:
-        if full and s.estado == "pendiente":
-            s.estado = "en_espera"
-        elif not full and s.estado == "en_espera":
-            s.estado = "pendiente"
+def reject_if_full(group: GrupoEstudio) -> list[Solicitud]:
+    """Rechazo automático: si el grupo quedó lleno, las solicitudes pendientes se rechazan, para
+    que nadie se quede esperando una respuesta que ya no puede llegar. Devuelve las rechazadas
+    para avisarles por correo (ver notify_full)."""
+    if not is_full(group):
+        return []
+    rejected = [s for s in group.solicitudes if s.estado == "pendiente"]
+    for s in rejected:
+        s.estado = "rechazada"
+        s.respondida_en = now_utc()
+    return rejected
+
+
+def send_full_notice(email: str, name: str, subject: str) -> None:
+    # Si el correo falla el rechazo igual queda guardado: se ve en «Mis solicitudes»
+    try:
+        send_group_full_email(email, name, subject)
+    except Exception:
+        logger.exception("No se pudo avisar por correo que el grupo se llenó a %s", email)
+
+
+def notify_full(tasks: BackgroundTasks, rejected: list[Solicitud]) -> None:
+    """Avisa por correo a quienes se rechazó porque el grupo se llenó. Se envía después de
+    responder y se copian los datos ahora, porque la sesión de la base ya estará cerrada."""
+    for s in rejected:
+        if s.usuario.eliminado_en is not None:
+            continue
+        subject = f"{s.grupo.asignatura.sigla} {s.grupo.asignatura.nombre}"
+        tasks.add_task(send_full_notice, s.usuario.email, s.usuario.nombre, subject)
 
 
 def own_group(db: Session, grupo_id: int, user: Usuario) -> GrupoEstudio:
@@ -247,8 +264,7 @@ def request_to_join(
     user: Usuario = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    """Pide unirse a un grupo abierto. El creador la acepta o la rechaza; si el grupo está
-    lleno, la solicitud queda en espera hasta que se libere un cupo."""
+    """Pide unirse a un grupo abierto y con cupo. El creador la acepta o la rechaza."""
     group = visible_group(db, grupo_id, user)
     if membership(group, user.id) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Ya eres integrante de este grupo.")
@@ -261,10 +277,11 @@ def request_to_join(
         )
     if not group.abierto:
         raise HTTPException(status.HTTP_409_CONFLICT, "Este grupo está cerrado.")
+    if is_full(group):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Este grupo está lleno.")
 
     message = data.mensaje if data and data.mensaje else None
-    state = "en_espera" if is_full(group) else "pendiente"
-    group.solicitudes.append(Solicitud(usuario=user, mensaje=message, estado=state))
+    group.solicitudes.append(Solicitud(usuario=user, mensaje=message))
     try:
         db.commit()
     except IntegrityError:
@@ -278,7 +295,7 @@ def request_to_join(
 def cancel_request(
     grupo_id: int, user: Usuario = Depends(current_user), db: Session = Depends(get_db)
 ):
-    """Retira la solicitud pendiente o en espera del usuario antes de que el creador responda."""
+    """Retira la solicitud pendiente del usuario antes de que el creador responda."""
     group = visible_group(db, grupo_id, user)
     request = active_request(group, user.id)
     if request is None:
@@ -385,11 +402,13 @@ def apply_group_details(group: GrupoEstudio, data: GrupoIn | GrupoEditIn) -> Non
 def update_group(
     grupo_id: int,
     data: GrupoEditIn,
+    tasks: BackgroundTasks,
     user: Usuario = Depends(current_user),
     db: Session = Depends(get_db),
 ):
     """Edita el grupo (solo el creador). La asignatura no cambia. Con `abierto: false` el grupo
-    deja de recibir solicitudes; las que ya estaban siguen esperando hasta que lo reabra."""
+    deja de recibir solicitudes; las que ya estaban siguen esperando hasta que lo reabra. Si el
+    cupo queda igual a los integrantes, el grupo se llena y se rechazan las pendientes."""
     group = own_group(db, grupo_id, user)
     check_group_details(data)
     if data.cupo_maximo < len(group.miembros):
@@ -399,9 +418,9 @@ def update_group(
         )
     apply_group_details(group, data)
     group.abierto = data.abierto
-    # Si subió el cupo, las solicitudes en espera vuelven a pendiente
-    sync_waitlist(group)
+    rejected = reject_if_full(group)
     db.commit()
+    notify_full(tasks, rejected)
     return detail_out(group, user)
 
 
@@ -424,8 +443,7 @@ def remove_member(
     user: Usuario = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    """Expulsa a un integrante (solo el creador). Con el cupo libre, las solicitudes en espera
-    vuelven a pendiente."""
+    """Expulsa a un integrante (solo el creador)."""
     group = own_group(db, grupo_id, user)
     if usuario_id == user.id:
         raise HTTPException(
@@ -435,7 +453,6 @@ def remove_member(
     if member is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Esa persona no es integrante del grupo.")
     group.miembros.remove(member)
-    sync_waitlist(group)
     db.commit()
     return detail_out(group, user)
 
@@ -455,7 +472,6 @@ def leave_group(
             "Eres el creador del grupo: para dejarlo, elimínalo.",
         )
     group.miembros.remove(member)
-    sync_waitlist(group)
     db.commit()
 
 
@@ -481,19 +497,18 @@ def detail_out(group: GrupoEstudio, user: Usuario) -> GrupoDetalleOut:
         ],
         es_miembro=is_member,
         solicitud_pendiente=request is not None,
-        solicitud_en_espera=request is not None and request.estado == "en_espera",
         lugar=group.lugar if is_member else None,
         enlace=group.enlace if is_member else None,
     )
 
 
 def mine_out(group: GrupoEstudio, user: Usuario) -> GrupoMioOut:
-    """Grupo de «mis grupos». Solo el creador ve las solicitudes pendientes y en espera, las más
-    antiguas primero (el orden de la lista de espera), y las invitaciones que aún no responden."""
+    """Grupo de «mis grupos». Solo el creador ve las solicitudes pendientes, las más antiguas
+    primero, y las invitaciones que aún no responden."""
     is_owner = group.creador_id == user.id
     pending = (
         sorted(
-            (s for s in group.solicitudes if s.estado in ACTIVE_REQUEST_STATES),
+            (s for s in group.solicitudes if s.estado == "pendiente"),
             key=lambda s: (s.creada_en, s.id),
         )
         if is_owner

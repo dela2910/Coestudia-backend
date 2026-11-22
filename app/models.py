@@ -171,7 +171,7 @@ class GrupoEstudio(Base):
     enlace: Mapped[str | None] = mapped_column(String(500))
     cupo_maximo: Mapped[int] = mapped_column(Integer)
     # false = el creador lo cerró y no recibe solicitudes. Que esté lleno se calcula con el cupo:
-    # un grupo lleno pero abierto deja las solicitudes nuevas en espera
+    # un grupo lleno tampoco las recibe, y al llenarse se rechazan las pendientes
     abierto: Mapped[bool] = mapped_column(Boolean, default=True)
     # Fecha que elige el creador; después de ella el grupo se elimina por vigencia
     vigente_hasta: Mapped[date] = mapped_column(Date)
@@ -247,10 +247,10 @@ class MiembroGrupo(Base):
 class Solicitud(Base):
     __tablename__ = "solicitud"
     __table_args__ = (
-        # en_espera: el grupo está lleno; vuelve a pendiente cuando se libera un cupo.
+        # rechazada: la rechazó el creador o se llenó el grupo (rechazo automático).
         # cancelada: quien la envió la retiró antes de que el creador respondiera
         CheckConstraint(
-            "estado IN ('pendiente', 'en_espera', 'aceptada', 'rechazada', 'cancelada')",
+            "estado IN ('pendiente', 'aceptada', 'rechazada', 'cancelada')",
             name="ck_solicitud_estado",
         ),
         # Las fechas de cierre calzan con el estado
@@ -262,14 +262,14 @@ class Solicitud(Base):
             "(cancelada_en IS NOT NULL) = (estado = 'cancelada')",
             name="ck_solicitud_cancelada",
         ),
-        # Una sola solicitud activa (pendiente o en espera) por usuario y grupo
+        # Una sola solicitud pendiente por usuario y grupo
         Index(
-            "uq_solicitud_activa",
+            "uq_solicitud_pendiente",
             "grupo_id",
             "usuario_id",
             unique=True,
-            sqlite_where=text("estado IN ('pendiente', 'en_espera')"),
-            postgresql_where=text("estado IN ('pendiente', 'en_espera')"),
+            sqlite_where=text("estado = 'pendiente'"),
+            postgresql_where=text("estado = 'pendiente'"),
         ),
         Index("ix_solicitud_usuario", "usuario_id"),
     )

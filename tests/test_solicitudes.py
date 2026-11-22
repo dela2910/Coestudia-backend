@@ -117,24 +117,17 @@ def test_members_cannot_request(client, users):
     assert ask(client, users["ana"], group_id).status_code == 409
 
 
-def test_request_to_full_group_waits(client, users):
+def test_cannot_request_full_group(client, users):
     group_id = create_group(client, users["ana"], cupo_maximo=2)
     ask(client, users["luis"], group_id)
     answer(client, users["ana"], pending_ids(client, users["ana"])[0], "aceptar")
 
-    # Se llenó el cupo, pero sigue abierto: la solicitud queda en espera
+    # Se llenó el cupo: sigue abierto, pero no recibe solicitudes nuevas
     response = ask(client, users["sofia"], group_id)
 
-    assert response.status_code == 201
-    body = response.json()
-    assert (body["solicitud_pendiente"], body["solicitud_en_espera"]) == (True, True)
-    requests = my_groups(client, users["ana"])["creados"][0]["solicitudes"]
-    assert [(s["usuario"]["nombre"], s["estado"]) for s in requests] == [
-        ("Sofía Pérez", "en_espera")
-    ]
-    # Se puede cancelar igual que una pendiente
-    cancel = client.delete(f"/api/grupos/{group_id}/solicitudes", headers=users["sofia"])
-    assert cancel.json()["solicitud_pendiente"] is False
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Este grupo está lleno."
+    assert pending_ids(client, users["ana"]) == []
 
 
 def test_cannot_request_closed_group_with_spots(client, users, session_factory):
@@ -152,7 +145,7 @@ def test_simultaneous_requests_keep_one(client, users, monkeypatch):
     group_id = create_group(client, users["ana"])
     ask(client, users["luis"], group_id)
     # Simula que la segunda llegó antes de que la primera quedara guardada: la frena el índice
-    # uq_solicitud_activa de la base
+    # uq_solicitud_pendiente de la base
     monkeypatch.setattr("app.routers.grupos.active_request", lambda group, user_id: None)
 
     response = ask(client, users["luis"], group_id)
@@ -208,7 +201,7 @@ def test_accept_request(client, users):
     assert (detail["es_miembro"], detail["lugar"]) == (True, "Biblioteca")
 
 
-def test_accepting_the_last_spot_puts_the_others_on_hold(client, users):
+def test_accepting_the_last_spot_rejects_the_others(client, users, answer_outbox, full_outbox):
     group_id = create_group(client, users["ana"], cupo_maximo=2)
     ask(client, users["luis"], group_id)
     ask(client, users["sofia"], group_id)
@@ -216,29 +209,25 @@ def test_accepting_the_last_spot_puts_the_others_on_hold(client, users):
 
     body = answer(client, users["ana"], first, "aceptar").json()
 
-    # El grupo sigue abierto; la otra solicitud queda en espera y no se puede aceptar
-    assert (body["miembros"], body["abierto"]) == (2, True)
-    assert [(s["id"], s["estado"]) for s in body["solicitudes"]] == [(second, "en_espera")]
-    response = answer(client, users["ana"], second, "aceptar")
-    assert response.status_code == 409
-    assert "en espera" in response.json()["detail"]
-    # Sí se puede rechazar
-    assert answer(client, users["ana"], second, "rechazar").status_code == 200
+    # Rechazo automático: el grupo se llenó y la otra solicitud ya no puede aceptarse
+    assert (body["miembros"], body["abierto"], body["solicitudes"]) == (2, True, [])
+    states = {r["grupo"]["id"]: r["estado"] for r in my_requests(client, users["sofia"])}
+    assert states == {group_id: "rechazada"}
+    assert answer(client, users["ana"], second, "aceptar").status_code == 409
+    # Luis recibe el aviso de aceptada; Sofía, el de que el grupo se completó
+    assert [(to, accepted) for to, _, _, accepted in answer_outbox] == [("luis@uc.cl", True)]
+    assert full_outbox == [("sofia@uc.cl", "Sofía Pérez", "MAT1620 Cálculo II")]
 
 
-def test_waiting_request_returns_to_pending_when_a_spot_frees(client, users):
+def test_a_spot_that_frees_up_accepts_new_requests(client, users):
     group_id = create_group(client, users["ana"], cupo_maximo=2)
     ask(client, users["luis"], group_id)
     answer(client, users["ana"], pending_ids(client, users["ana"])[0], "aceptar")
-    ask(client, users["sofia"], group_id)
+    assert ask(client, users["sofia"], group_id).status_code == 409
 
     client.post(f"/api/grupos/{group_id}/abandonar", headers=users["luis"])
 
-    (request,) = my_groups(client, users["ana"])["creados"][0]["solicitudes"]
-    assert request["estado"] == "pendiente"
-    assert answer(client, users["ana"], request["id"], "aceptar").status_code == 200
-    states = {r["grupo"]["id"]: r["estado"] for r in my_requests(client, users["sofia"])}
-    assert states == {group_id: "aceptada"}
+    assert ask(client, users["sofia"], group_id).status_code == 201
 
 
 def test_cannot_accept_in_a_closed_group(client, users, session_factory):
@@ -285,7 +274,7 @@ def test_two_acceptances_at_once_do_not_exceed_the_spots(
 
     # Después del bloqueo ve el último cupo ocupado: no acepta y el grupo no pasa del cupo
     assert response.status_code == 409
-    assert "en espera" in response.json()["detail"]
+    assert response.json()["detail"] == "El grupo ya no tiene cupos."
     with session_factory() as db:
         assert len(db.get(GrupoEstudio, group_id).miembros) == 2
 
