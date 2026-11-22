@@ -265,14 +265,30 @@ class SolicitudOut(BaseModel):
     creada_en: datetime
 
 
+class InvitacionIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    # Correo institucional de quien se invita
+    email: EmailStr
+
+
+class InvitacionOut(BaseModel):
+    """Invitación pendiente de un grupo, tal como la ve el creador."""
+
+    id: int
+    usuario: SolicitanteOut
+    creada_en: datetime
+
+
 class GrupoMioOut(GrupoResumenOut):
     """Grupo en «mis grupos». El usuario es integrante, así que ve lugar y enlace; si es el
-    creador, también las solicitudes pendientes."""
+    creador, también las solicitudes y las invitaciones pendientes."""
 
     es_creador: bool
     lugar: str | None
     enlace: str | None
     solicitudes: list[SolicitudOut]
+    invitaciones: list[InvitacionOut]
 
 
 class MiSolicitudOut(BaseModel):
@@ -284,6 +300,17 @@ class MiSolicitudOut(BaseModel):
     mensaje: str | None
     creada_en: datetime
     respondida_en: datetime | None
+    grupo: GrupoResumenOut
+
+
+class MiInvitacionOut(BaseModel):
+    """Invitación pendiente que recibió el usuario, con el grupo como en el buscador (sin lugar ni
+    enlace: los ve recién al aceptar)."""
+
+    id: int
+    # Nombre del creador del grupo, que es quien invita
+    invitado_por: str
+    creada_en: datetime
     grupo: GrupoResumenOut
 
 

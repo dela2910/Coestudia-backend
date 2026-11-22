@@ -114,3 +114,24 @@ def send_request_answered_email(to: str, name: str, subject: str, accepted: bool
         ),
         text=f"Hola {first_name(name)}:\n\n{title}. {body}\n\n{action}: {link}",
     )
+
+
+def send_invitation_email(to: str, name: str, inviter: str, subject: str) -> None:
+    """Avisa que el creador de un grupo lo invitó a unirse. `subject` es la asignatura del grupo,
+    ej. «MAT1620 Cálculo II»."""
+    link = frontend_url()
+    title = f"{first_name(inviter)} te invitó a su grupo de {subject}"
+    body = (
+        "Puedes aceptar o rechazar la invitación en «Mis solicitudes». Si la aceptas, entras al "
+        "grupo de inmediato y ves el lugar o el enlace de las sesiones."
+    )
+    send_email(
+        to,
+        title,
+        html=(
+            f"<p>Hola {escape(first_name(name))}:</p>"
+            f"<p><strong>{escape(title)}.</strong> {escape(body)}</p>"
+            f'<p><a href="{escape(link)}">Ver la invitación</a></p>'
+        ),
+        text=f"Hola {first_name(name)}:\n\n{title}. {body}\n\nVer la invitación: {link}",
+    )
