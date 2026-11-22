@@ -74,6 +74,7 @@ app/
     ├── asignaturas.py  # /api/asignaturas: catálogo para autocompletar siglas
     ├── grupos.py    # /api/grupos: buscar, detalle, crear, mis grupos, pedir unirse, administrar y abandonar
     ├── solicitudes.py  # /api/solicitudes: mis solicitudes; aceptar o rechazar (el creador)
+    ├── invitaciones.py # invitar por correo (el creador); aceptar o rechazar (el invitado)
     ├── archivos.py  # archivos del grupo: subir, listar, descargar y eliminar
     ├── foro.py      # foro del grupo: temas y respuestas
     └── sugerencias.py  # /api/sugerencias: grupos sugeridos y búsqueda sugerida de asignaturas
@@ -83,6 +84,7 @@ tests/
 ├── test_auth.py
 ├── test_grupos.py
 ├── test_solicitudes.py
+├── test_invitaciones.py
 ├── test_administrar.py
 ├── test_archivos.py
 ├── test_foro.py
@@ -162,8 +164,8 @@ Con `dia`, `desde` y `hasta` basta que un mismo horario del grupo calce con todo
 tiene que cruzar con el rango, no quedar completo dentro (terminar justo a la hora `desde` no cuenta).
 
 Devuelve solo grupos no eliminados y vigentes (`vigente_hasta` desde hoy, hora de Chile), con los
-abiertos y con cupo primero. `abierto` es solo la decisión del creador: un grupo lleno sigue abierto
-y las solicitudes nuevas quedan en espera. No incluye `lugar` ni `enlace`: solo los ven los integrantes.
+abiertos y con cupo primero. `abierto` es solo la decisión del creador; un grupo lleno tampoco
+recibe solicitudes. No incluye `lugar` ni `enlace`: solo los ven los integrantes.
 
 `GET /api/grupos/{id}` (requiere sesión) devuelve el detalle: lo mismo que el buscador más
 `creador`, `integrantes` (nombre, carrera y si es el creador; sin correo) y `es_miembro`. `lugar` y
@@ -194,7 +196,8 @@ nombre (igual que en «mis asignaturas»).
 
 `GET /api/grupos/mios` (requiere sesión) devuelve `{creados, participo}`: los grupos vigentes donde
 el usuario es integrante, con `lugar`, `enlace` y `es_creador`. En los que creó vienen además las
-`solicitudes` pendientes (quién la envió, su carrera y el mensaje).
+`solicitudes` pendientes (quién la envió, su carrera y el mensaje) y las `invitaciones` que aún no
+responden.
 
 ### Solicitudes para unirse
 
@@ -202,18 +205,18 @@ el usuario es integrante, con `lugar`, `enlace` y `es_creador`. En los que creó
 | --------------------------------------- | ------------ | ------------------------------------------------ |
 | `POST /api/grupos/{id}/solicitudes`     | Cualquiera   | Pide unirse; `{mensaje?}` opcional (201)         |
 | `DELETE /api/grupos/{id}/solicitudes`   | Quien la pidió | Cancela su solicitud pendiente                 |
-| `GET /api/solicitudes/mias`             | Quien las envió | «Mis solicitudes»: pendientes, en espera, aceptadas y rechazadas |
-| `POST /api/solicitudes/{id}/aceptar`    | Creador      | Suma al integrante; si se llena el cupo, las demás quedan `en_espera` |
+| `GET /api/solicitudes/mias`             | Quien las envió | «Mis solicitudes»: pendientes, aceptadas y rechazadas |
+| `POST /api/solicitudes/{id}/aceptar`    | Creador      | Suma al integrante; si se llena el cupo, rechaza las demás |
 | `POST /api/solicitudes/{id}/rechazar`   | Creador      | La rechaza                                       |
 
-No se puede pedir unirse a un grupo del que ya eres integrante, cerrado o con otra solicitud
-activa tuya (409).
+No se puede pedir unirse a un grupo del que ya eres integrante, cerrado, lleno o con otra
+solicitud pendiente tuya (409).
 
-**Lista de espera.** Si el grupo está lleno, la solicitud se crea con estado `en_espera` (el
-detalle trae `solicitud_en_espera: true`). Cuando el creador acepta la que completa el cupo, las
-demás pendientes pasan a `en_espera`. Cuando se libera un cupo (alguien abandona, el creador lo
-expulsa o sube el cupo), las que estaban en espera vuelven a `pendiente`. Las en espera se pueden
-rechazar o cancelar, pero no aceptar (409). En «mis grupos» cada solicitud trae su `estado`. Pedir y cancelar devuelven el detalle del grupo, con
+**Rechazo automático.** Cuando el grupo completa su cupo (el creador acepta la última solicitud,
+un invitado acepta o el creador baja el cupo hasta los integrantes actuales), las demás solicitudes
+pendientes pasan a `rechazada` y se le avisa por correo a cada uno (`send_group_full_email`). Así
+nadie se queda esperando una respuesta que ya no puede llegar. Si después se libera un cupo, se
+puede volver a pedir unirse. Pedir y cancelar devuelven el detalle del grupo, con
 `solicitud_pendiente`; aceptar y rechazar devuelven el grupo como en «mis grupos». «Mis
 solicitudes» trae solo las de grupos vigentes, las más recientes primero y sin las canceladas; el
 grupo viene como en el buscador, sin lugar ni enlace. A quien no es el
@@ -223,6 +226,30 @@ creador, las rutas de `/api/solicitudes` le responden 404.
 (`send_request_answered_email` en `app/mailer.py`). Se envía en segundo plano, después de
 responderle al creador; si Brevo falla, la respuesta igual queda guardada y el error queda en el
 log. Sin `BREVO_API_KEY`, el correo se muestra en la consola del backend.
+
+### Invitaciones
+
+| Método y ruta                                     | Quién      | Qué hace                                  |
+| ------------------------------------------------- | ---------- | ----------------------------------------- |
+| `POST /api/grupos/{id}/invitaciones`              | Creador    | Invita por correo; `{email}` (201)        |
+| `DELETE /api/grupos/{id}/invitaciones/{inv}`      | Creador    | Cancela una invitación pendiente          |
+| `GET /api/invitaciones/mias`                      | Invitado   | Invitaciones pendientes que recibió       |
+| `POST /api/invitaciones/{inv}/aceptar`            | Invitado   | Entra al grupo                            |
+| `POST /api/invitaciones/{inv}/rechazar`           | Invitado   | La rechaza (204)                          |
+
+Es lo contrario de una solicitud: el creador invita a un compañero con su correo institucional y
+el invitado decide. Solo se puede invitar a una cuenta verificada de la misma universidad (si no,
+404), que no sea integrante, sin otra invitación pendiente ni una solicitud activa a ese grupo (409:
+en ese caso basta con aceptar su solicitud). Se puede invitar aunque el grupo esté cerrado a
+solicitudes, pero no si está lleno. Quien tiene una invitación pendiente no puede además pedir
+unirse (409).
+
+Aceptar suma al invitado como integrante, con el mismo bloqueo del grupo que al aceptar una
+solicitud, para no pasar del cupo. Si el grupo se llenó entre medio, responde 409 y la invitación
+sigue pendiente. Si con el nuevo integrante se completa el cupo, las solicitudes pendientes se
+rechazan (rechazo automático). Al invitar se le avisa por correo (`send_invitation_email`), en segundo plano como el
+aviso de las solicitudes. A quien no es el invitado, las rutas de `/api/invitaciones` le responden
+404.
 
 ### Administrar y abandonar
 

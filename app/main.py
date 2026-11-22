@@ -11,12 +11,13 @@ from app.routers import (
     foro,
     grupos,
     hello,
+    invitaciones,
     perfil,
     solicitudes,
     sugerencias,
 )
 
-app = FastAPI(title="Coestudia API", version="0.1.0")
+app = FastAPI(title="Coestudia API", version="1.0.0")
 
 # Orígenes permitidos: Vite en desarrollo y, si existe, la URL del frontend en producción
 allowed_origins = ["http://localhost:5173"]
@@ -42,3 +43,4 @@ app.include_router(archivos.router)
 app.include_router(foro.router)
 app.include_router(asistente.router)
 app.include_router(sugerencias.router)
+app.include_router(invitaciones.router)

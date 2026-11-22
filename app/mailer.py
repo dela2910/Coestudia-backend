@@ -114,3 +114,45 @@ def send_request_answered_email(to: str, name: str, subject: str, accepted: bool
         ),
         text=f"Hola {first_name(name)}:\n\n{title}. {body}\n\n{action}: {link}",
     )
+
+
+def send_invitation_email(to: str, name: str, inviter: str, subject: str) -> None:
+    """Avisa que el creador de un grupo lo invitó a unirse. `subject` es la asignatura del grupo,
+    ej. «MAT1620 Cálculo II»."""
+    link = frontend_url()
+    title = f"{first_name(inviter)} te invitó a su grupo de {subject}"
+    body = (
+        "Puedes aceptar o rechazar la invitación en «Mis solicitudes». Si la aceptas, entras al "
+        "grupo de inmediato y ves el lugar o el enlace de las sesiones."
+    )
+    send_email(
+        to,
+        title,
+        html=(
+            f"<p>Hola {escape(first_name(name))}:</p>"
+            f"<p><strong>{escape(title)}.</strong> {escape(body)}</p>"
+            f'<p><a href="{escape(link)}">Ver la invitación</a></p>'
+        ),
+        text=f"Hola {first_name(name)}:\n\n{title}. {body}\n\nVer la invitación: {link}",
+    )
+
+
+def send_group_full_email(to: str, name: str, subject: str) -> None:
+    """Avisa que su solicitud se rechazó sola porque el grupo completó su cupo antes de que el
+    creador respondiera. `subject` es la asignatura del grupo, ej. «MAT1620 Cálculo II»."""
+    link = frontend_url()
+    title = f"El grupo de {subject} se completó"
+    body = (
+        "El grupo llenó su cupo antes de que el creador respondiera tu solicitud, así que se "
+        "rechazó automáticamente. Puedes buscar otros grupos de la misma asignatura o crear uno."
+    )
+    send_email(
+        to,
+        title,
+        html=(
+            f"<p>Hola {escape(first_name(name))}:</p>"
+            f"<p><strong>{escape(title)}.</strong> {escape(body)}</p>"
+            f'<p><a href="{escape(link)}">Buscar grupos</a></p>'
+        ),
+        text=f"Hola {first_name(name)}:\n\n{title}. {body}\n\nBuscar grupos: {link}",
+    )

@@ -4,18 +4,19 @@ las de sus grupos (solo el creador). Al responder, se avisa por correo a quien l
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.mailer import send_request_answered_email
-from app.models import MiembroGrupo, Solicitud, Usuario, now_utc
+from app.models import GrupoEstudio, MiembroGrupo, Solicitud, Usuario, now_utc
 from app.routers.grupos import (
-    ACTIVE_REQUEST_STATES,
     is_active,
     is_full,
     mine_out,
+    notify_full,
+    reject_if_full,
     summary_fields,
-    sync_waitlist,
 )
 from app.schemas import GrupoMioOut, GrupoResumenOut, MiSolicitudOut
 from app.security import current_user
@@ -48,15 +49,23 @@ def my_requests(user: Usuario = Depends(current_user)):
 
 
 def pending_of_my_group(db: Session, solicitud_id: int, user: Usuario) -> Solicitud:
-    """Solicitud pendiente o en espera de un grupo vigente creado por el usuario, o el error
-    que corresponda."""
+    """Solicitud pendiente de un grupo vigente creado por el usuario, o el error que
+    corresponda."""
     request = db.get(Solicitud, solicitud_id)
     # A quien no es el creador se le responde 404, para no revelar solicitudes ajenas
     if request is None or request.grupo.creador_id != user.id or not is_active(request.grupo):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Esta solicitud no existe.")
-    if request.estado not in ACTIVE_REQUEST_STATES:
+    if request.estado != "pendiente":
         raise HTTPException(status.HTTP_409_CONFLICT, "Esta solicitud ya no está pendiente.")
     return request
+
+
+def lock_group(db: Session, group: GrupoEstudio) -> None:
+    """Bloquea la fila del grupo hasta el commit (en PostgreSQL) y vuelve a leer todo desde la
+    base. Si el creador acepta dos solicitudes a la vez (dos pestañas o doble clic), la segunda
+    espera a que se guarde la primera y ve el cupo ya ocupado: así no se pasa del cupo."""
+    db.execute(select(GrupoEstudio.id).where(GrupoEstudio.id == group.id).with_for_update())
+    db.expire_all()
 
 
 def notify_answer(email: str, name: str, subject: str, accepted: bool) -> None:
@@ -85,23 +94,24 @@ def accept_request(
     db: Session = Depends(get_db),
 ):
     """Suma a quien la envió como integrante. Si con eso se llena el cupo, las demás solicitudes
-    quedan en espera hasta que se libere uno."""
+    pendientes se rechazan solas y se les avisa por correo."""
     request = pending_of_my_group(db, solicitud_id, user)
     group = request.grupo
+    lock_group(db, group)
+    if request.estado != "pendiente":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Esta solicitud ya no está pendiente.")
     if not group.abierto:
         raise HTTPException(status.HTTP_409_CONFLICT, "El grupo está cerrado.")
     if is_full(group):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "El grupo ya no tiene cupos: la solicitud queda en espera hasta que se libere uno.",
-        )
+        raise HTTPException(status.HTTP_409_CONFLICT, "El grupo ya no tiene cupos.")
 
     request.estado = "aceptada"
     request.respondida_en = now_utc()
     group.miembros.append(MiembroGrupo(usuario_id=request.usuario_id))
-    sync_waitlist(group)
+    rejected = reject_if_full(group)
     db.commit()
     schedule_notification(tasks, request, accepted=True)
+    notify_full(tasks, rejected)
     db.refresh(group)
     return mine_out(group, user)
 

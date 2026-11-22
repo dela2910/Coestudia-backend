@@ -172,10 +172,10 @@ def test_token_type_is_validated(db):
         db.flush()
 
 
-def test_only_one_active_request_counting_waiting_ones(db):
+def test_only_one_pending_request(db):
     group = make_group(db, make_user(db))
     student = make_user(db, "beto@uc.cl")
-    db.add(Solicitud(grupo=group, usuario=student, estado="en_espera"))
+    db.add(Solicitud(grupo=group, usuario=student))
     db.flush()
     db.add(Solicitud(grupo=group, usuario=student))
     with pytest.raises(IntegrityError):
@@ -215,7 +215,7 @@ def test_migration_reopens_groups_and_queues_requests_of_full_ones(tmp_path):
             "(1, 1, 3, 'pendiente', '2026-01-01'), (2, 2, 3, 'pendiente', '2026-01-01')"
         )
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "a7c3e9d1f2b4")
 
     with engine.connect() as conn:
         assert conn.exec_driver_sql("SELECT abierto FROM grupo_estudio ORDER BY id").all() == [
@@ -227,4 +227,40 @@ def test_migration_reopens_groups_and_queues_requests_of_full_ones(tmp_path):
             ("pendiente",),
         ]
     command.downgrade(config, "cd045042d78f")
+    engine.dispose()
+
+
+def test_migration_rejects_waiting_requests(tmp_path):
+    # Con el rechazo automático ya no hay lista de espera: las que esperaban un cupo se rechazan
+    url = f"sqlite:///{tmp_path / 'waiting.db'}"
+    config = Config("alembic.ini")
+    config.attributes["url"] = url
+    command.upgrade(config, "cea7768fa53b")
+    engine = make_engine(url)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "INSERT INTO usuario (id, email, password_hash, nombre, universidad, "
+            "terminos_aceptados_en, creado_en) VALUES "
+            "(1, 'a@uc.cl', 'h', 'A', 'UC', '2026-01-01', '2026-01-01'), "
+            "(2, 'b@uc.cl', 'h', 'B', 'UC', '2026-01-01', '2026-01-01')"
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO asignatura (id, sigla, nombre, universidad) VALUES (1, 'MAT1', 'C', 'UC')"
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO grupo_estudio (id, asignatura_id, creador_id, es_online, lugar, "
+            "cupo_maximo, abierto, vigente_hasta, creado_en) VALUES "
+            "(1, 1, 1, 0, 'B', 2, 1, '2030-01-01', '2026-01-01')"
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO solicitud (id, grupo_id, usuario_id, estado, creada_en) VALUES "
+            "(1, 1, 2, 'en_espera', '2026-01-01')"
+        )
+
+    command.upgrade(config, "head")
+
+    with engine.connect() as conn:
+        state, answered = conn.exec_driver_sql("SELECT estado, respondida_en FROM solicitud").one()
+        assert (state, answered is not None) == ("rechazada", True)
+    command.downgrade(config, "cea7768fa53b")
     engine.dispose()

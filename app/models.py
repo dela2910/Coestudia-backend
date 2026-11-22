@@ -79,6 +79,7 @@ class Usuario(Base):
     grupos_creados: Mapped[list["GrupoEstudio"]] = relationship(back_populates="creador")
     membresias: Mapped[list["MiembroGrupo"]] = relationship(back_populates="usuario")
     solicitudes: Mapped[list["Solicitud"]] = relationship(back_populates="usuario")
+    invitaciones: Mapped[list["Invitacion"]] = relationship(back_populates="usuario")
 
 
 class Asignatura(Base):
@@ -170,7 +171,7 @@ class GrupoEstudio(Base):
     enlace: Mapped[str | None] = mapped_column(String(500))
     cupo_maximo: Mapped[int] = mapped_column(Integer)
     # false = el creador lo cerró y no recibe solicitudes. Que esté lleno se calcula con el cupo:
-    # un grupo lleno pero abierto deja las solicitudes nuevas en espera
+    # un grupo lleno tampoco las recibe, y al llenarse se rechazan las pendientes
     abierto: Mapped[bool] = mapped_column(Boolean, default=True)
     # Fecha que elige el creador; después de ella el grupo se elimina por vigencia
     vigente_hasta: Mapped[date] = mapped_column(Date)
@@ -189,6 +190,9 @@ class GrupoEstudio(Base):
         back_populates="grupo", cascade="all, delete-orphan"
     )
     solicitudes: Mapped[list["Solicitud"]] = relationship(
+        back_populates="grupo", cascade="all, delete-orphan"
+    )
+    invitaciones: Mapped[list["Invitacion"]] = relationship(
         back_populates="grupo", cascade="all, delete-orphan"
     )
     archivos: Mapped[list["Archivo"]] = relationship(
@@ -243,10 +247,10 @@ class MiembroGrupo(Base):
 class Solicitud(Base):
     __tablename__ = "solicitud"
     __table_args__ = (
-        # en_espera: el grupo está lleno; vuelve a pendiente cuando se libera un cupo.
+        # rechazada: la rechazó el creador o se llenó el grupo (rechazo automático).
         # cancelada: quien la envió la retiró antes de que el creador respondiera
         CheckConstraint(
-            "estado IN ('pendiente', 'en_espera', 'aceptada', 'rechazada', 'cancelada')",
+            "estado IN ('pendiente', 'aceptada', 'rechazada', 'cancelada')",
             name="ck_solicitud_estado",
         ),
         # Las fechas de cierre calzan con el estado
@@ -258,14 +262,14 @@ class Solicitud(Base):
             "(cancelada_en IS NOT NULL) = (estado = 'cancelada')",
             name="ck_solicitud_cancelada",
         ),
-        # Una sola solicitud activa (pendiente o en espera) por usuario y grupo
+        # Una sola solicitud pendiente por usuario y grupo
         Index(
-            "uq_solicitud_activa",
+            "uq_solicitud_pendiente",
             "grupo_id",
             "usuario_id",
             unique=True,
-            sqlite_where=text("estado IN ('pendiente', 'en_espera')"),
-            postgresql_where=text("estado IN ('pendiente', 'en_espera')"),
+            sqlite_where=text("estado = 'pendiente'"),
+            postgresql_where=text("estado = 'pendiente'"),
         ),
         Index("ix_solicitud_usuario", "usuario_id"),
     )
@@ -284,6 +288,53 @@ class Solicitud(Base):
 
     grupo: Mapped[GrupoEstudio] = relationship(back_populates="solicitudes")
     usuario: Mapped[Usuario] = relationship(back_populates="solicitudes")
+
+
+class Invitacion(Base):
+    """Invitación del creador a un estudiante de su universidad para que entre al grupo. Es lo
+    contrario de una solicitud: aquí acepta o rechaza el invitado."""
+
+    __tablename__ = "invitacion"
+    __table_args__ = (
+        # cancelada: el creador la retiró antes de que el invitado respondiera
+        CheckConstraint(
+            "estado IN ('pendiente', 'aceptada', 'rechazada', 'cancelada')",
+            name="ck_invitacion_estado",
+        ),
+        # Las fechas de cierre calzan con el estado
+        CheckConstraint(
+            "(respondida_en IS NOT NULL) = (estado IN ('aceptada', 'rechazada'))",
+            name="ck_invitacion_respondida",
+        ),
+        CheckConstraint(
+            "(cancelada_en IS NOT NULL) = (estado = 'cancelada')",
+            name="ck_invitacion_cancelada",
+        ),
+        # Una sola invitación pendiente por usuario y grupo
+        Index(
+            "uq_invitacion_pendiente",
+            "grupo_id",
+            "usuario_id",
+            unique=True,
+            sqlite_where=text("estado = 'pendiente'"),
+            postgresql_where=text("estado = 'pendiente'"),
+        ),
+        Index("ix_invitacion_usuario", "usuario_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    grupo_id: Mapped[int] = mapped_column(ForeignKey("grupo_estudio.id", ondelete="CASCADE"))
+    # Quien recibe la invitación
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuario.id", ondelete="CASCADE"))
+    estado: Mapped[str] = mapped_column(String(20), default="pendiente")
+    creada_en: Mapped[datetime] = created_at()
+    # Cuando el invitado la aceptó o rechazó
+    respondida_en: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
+    # Cuando el creador la canceló
+    cancelada_en: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
+
+    grupo: Mapped[GrupoEstudio] = relationship(back_populates="invitaciones")
+    usuario: Mapped[Usuario] = relationship(back_populates="invitaciones")
 
 
 class Archivo(Base):
