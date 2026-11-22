@@ -17,7 +17,7 @@ from app.routers import (
     sugerencias,
 )
 
-app = FastAPI(title="Coestudia API", version="0.1.0")
+app = FastAPI(title="Coestudia API", version="1.0.0")
 
 # Orígenes permitidos: Vite en desarrollo y, si existe, la URL del frontend en producción
 allowed_origins = ["http://localhost:5173"]
