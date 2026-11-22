@@ -34,7 +34,6 @@ from app.models import (
     today_in_chile,
 )
 from app.routers.grupos import (
-    ACTIVE_REQUEST_STATES,
     is_active,
     matches_subject,
     overlaps,
@@ -120,7 +119,7 @@ def build_context(db: Session, user: Usuario) -> Context:
     excluded = {g.id for g in my_groups} | {
         s.grupo_id
         for s in user.solicitudes
-        if s.estado in ACTIVE_REQUEST_STATES or s.estado == "rechazada"
+        if s.estado in ("pendiente", "rechazada")
     }
 
     candidates = db.scalars(

@@ -294,15 +294,15 @@ def test_accept_invitation(client, users):
     assert owner_invitations(client, users["ana"]) == []
 
 
-def test_accepting_the_last_spot_puts_the_requests_on_hold(client, users):
+def test_accepting_the_last_spot_rejects_the_requests(client, users, full_outbox):
     group_id = create_group(client, users["ana"], cupo_maximo=2)
     ask(client, users["sofia"], group_id)
     invite(client, users["ana"], group_id, "luis@uc.cl")
 
     respond(client, users["luis"], invitation_id(client, users["luis"]), "aceptar")
 
-    requests = my_groups(client, users["ana"])["creados"][0]["solicitudes"]
-    assert [s["estado"] for s in requests] == ["en_espera"]
+    assert my_groups(client, users["ana"])["creados"][0]["solicitudes"] == []
+    assert full_outbox == [("sofia@uc.cl", "Sofía Pérez", "MAT1620 Cálculo II")]
 
 
 def test_cannot_accept_when_the_group_filled_up(client, users):

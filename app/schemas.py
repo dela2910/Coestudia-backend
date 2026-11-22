@@ -235,7 +235,6 @@ class GrupoDetalleOut(GrupoResumenOut):
     # El usuario ya pidió unirse y el creador aún no responde
     solicitud_pendiente: bool
     # La solicitud espera a que se libere un cupo
-    solicitud_en_espera: bool
     lugar: str | None
     enlace: str | None
 
@@ -259,7 +258,7 @@ class SolicitanteOut(BaseModel):
 class SolicitudOut(BaseModel):
     id: int
     usuario: SolicitanteOut
-    # pendiente | en_espera (el grupo está lleno)
+    # pendiente
     estado: str
     mensaje: str | None
     creada_en: datetime

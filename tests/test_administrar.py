@@ -116,15 +116,29 @@ def test_capacity_cannot_go_below_current_members(client, users):
     assert "3 integrantes" in response.json()["detail"]
 
 
-def test_raising_capacity_frees_waiting_requests(client, users):
-    group_id = create_group(client, users["ana"], cupo_maximo=2)
+def test_lowering_capacity_to_the_members_rejects_pending_requests(client, users, full_outbox):
+    group_id = create_group(client, users["ana"], cupo_maximo=3)
     join(client, users, group_id, "luis")
     ask(client, users["sofia"], group_id)
 
-    edit(client, users["ana"], group_id, cupo_maximo=3)
+    response = edit(client, users["ana"], group_id, cupo_maximo=2)
+
+    # El cupo quedó igual a los integrantes: el grupo se llenó y se rechaza la pendiente
+    assert response.status_code == 200
+    assert my_groups(client, users["ana"])["creados"][0]["solicitudes"] == []
+    assert full_outbox == [("sofia@uc.cl", "Sofía Pérez", "MAT1620 Cálculo II")]
+
+
+def test_raising_capacity_keeps_pending_requests(client, users, full_outbox):
+    group_id = create_group(client, users["ana"], cupo_maximo=3)
+    join(client, users, group_id, "luis")
+    ask(client, users["sofia"], group_id)
+
+    edit(client, users["ana"], group_id, cupo_maximo=4)
 
     (request,) = my_groups(client, users["ana"])["creados"][0]["solicitudes"]
     assert request["estado"] == "pendiente"
+    assert full_outbox == []
 
 
 def test_closing_stops_new_requests_and_reopening_allows_them(client, users):
@@ -192,19 +206,17 @@ def test_owner_removes_a_member(client, users):
     assert ask(client, users["luis"], group_id).status_code == 201
 
 
-def test_removing_a_member_frees_waiting_requests(client, users):
+def test_removing_a_member_frees_a_spot_for_new_requests(client, users):
     group_id = create_group(client, users["ana"], cupo_maximo=2)
     join(client, users, group_id, "luis")
-    ask(client, users["sofia"], group_id)
+    assert ask(client, users["sofia"], group_id).status_code == 409
 
-    body = client.delete(
+    client.delete(
         f"/api/grupos/{group_id}/integrantes/{luis_id(client, users, group_id)}",
         headers=users["ana"],
-    ).json()
+    )
 
-    assert body["solicitud_pendiente"] is False
-    (request,) = my_groups(client, users["ana"])["creados"][0]["solicitudes"]
-    assert request["estado"] == "pendiente"
+    assert ask(client, users["sofia"], group_id).status_code == 201
 
 
 def test_owner_cannot_remove_themselves(client, users, session_factory):
