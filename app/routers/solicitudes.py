@@ -4,11 +4,12 @@ las de sus grupos (solo el creador). Al responder, se avisa por correo a quien l
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.mailer import send_request_answered_email
-from app.models import MiembroGrupo, Solicitud, Usuario, now_utc
+from app.models import GrupoEstudio, MiembroGrupo, Solicitud, Usuario, now_utc
 from app.routers.grupos import (
     ACTIVE_REQUEST_STATES,
     is_active,
@@ -59,6 +60,14 @@ def pending_of_my_group(db: Session, solicitud_id: int, user: Usuario) -> Solici
     return request
 
 
+def lock_group(db: Session, group: GrupoEstudio) -> None:
+    """Bloquea la fila del grupo hasta el commit (en PostgreSQL) y vuelve a leer todo desde la
+    base. Si el creador acepta dos solicitudes a la vez (dos pestañas o doble clic), la segunda
+    espera a que se guarde la primera y ve el cupo ya ocupado: así no se pasa del cupo."""
+    db.execute(select(GrupoEstudio.id).where(GrupoEstudio.id == group.id).with_for_update())
+    db.expire_all()
+
+
 def notify_answer(email: str, name: str, subject: str, accepted: bool) -> None:
     # Si el correo falla la respuesta igual queda guardada: se ve en «Mis solicitudes»
     try:
@@ -88,6 +97,9 @@ def accept_request(
     quedan en espera hasta que se libere uno."""
     request = pending_of_my_group(db, solicitud_id, user)
     group = request.grupo
+    lock_group(db, group)
+    if request.estado not in ACTIVE_REQUEST_STATES:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Esta solicitud ya no está pendiente.")
     if not group.abierto:
         raise HTTPException(status.HTTP_409_CONFLICT, "El grupo está cerrado.")
     if is_full(group):

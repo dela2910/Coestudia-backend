@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import pytest
 
-from app.models import GrupoEstudio, Solicitud, today_in_chile
+from app.models import GrupoEstudio, MiembroGrupo, Solicitud, now_utc, today_in_chile
 
 
 def create_group(client, auth, **fields):
@@ -251,6 +251,57 @@ def test_cannot_accept_in_a_closed_group(client, users, session_factory):
     response = answer(client, users["ana"], pending_ids(client, users["ana"])[0], "aceptar")
     assert response.status_code == 409
     assert response.json()["detail"] == "El grupo está cerrado."
+
+
+def accept_meanwhile(monkeypatch, session_factory, request_id):
+    """Simula que, mientras esta aceptación espera el bloqueo del grupo, otra (otra pestaña o un
+    doble clic) acepta la solicitud request_id y se guarda primero."""
+    from app.routers import solicitudes
+
+    real_lock = solicitudes.lock_group
+
+    def lock_after_the_other(db, group):
+        len(group.miembros)  # esta petición ya había leído el grupo antes de esperar
+        with session_factory() as other:
+            request = other.get(Solicitud, request_id)
+            request.estado, request.respondida_en = "aceptada", now_utc()
+            other.add(MiembroGrupo(grupo_id=request.grupo_id, usuario_id=request.usuario_id))
+            other.commit()
+        real_lock(db, group)
+
+    monkeypatch.setattr(solicitudes, "lock_group", lock_after_the_other)
+
+
+def test_two_acceptances_at_once_do_not_exceed_the_spots(
+    client, users, session_factory, monkeypatch
+):
+    group_id = create_group(client, users["ana"], cupo_maximo=2)
+    ask(client, users["luis"], group_id)
+    ask(client, users["sofia"], group_id)
+    first, second = pending_ids(client, users["ana"])
+    accept_meanwhile(monkeypatch, session_factory, second)
+
+    response = answer(client, users["ana"], first, "aceptar")
+
+    # Después del bloqueo ve el último cupo ocupado: no acepta y el grupo no pasa del cupo
+    assert response.status_code == 409
+    assert "en espera" in response.json()["detail"]
+    with session_factory() as db:
+        assert len(db.get(GrupoEstudio, group_id).miembros) == 2
+
+
+def test_accepting_the_same_request_twice_at_once(client, users, session_factory, monkeypatch):
+    group_id = create_group(client, users["ana"])
+    ask(client, users["luis"], group_id)
+    (request_id,) = pending_ids(client, users["ana"])
+    accept_meanwhile(monkeypatch, session_factory, request_id)
+
+    response = answer(client, users["ana"], request_id, "aceptar")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Esta solicitud ya no está pendiente."
+    with session_factory() as db:
+        assert len(db.get(GrupoEstudio, group_id).miembros) == 2
 
 
 def test_reject_request(client, users, session_factory):
