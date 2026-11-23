@@ -1,6 +1,7 @@
 """Formato de entrada y salida de la API (Pydantic)."""
 
 from datetime import date, datetime, time
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer, field_validator
 
@@ -429,3 +430,34 @@ class AsignaturaSugeridaOut(BaseModel):
     grupos_disponibles: int
     # Por qué se sugiere (ej. «Está en tus asignaturas»); None si solo calza con lo escrito
     motivo: str | None
+
+
+class MetricaWebIn(BaseModel):
+    """Una métrica de web-vitals tal como la reporta el navegador."""
+
+    nombre: Literal["LCP", "INP", "CLS", "FCP", "TTFB"]
+    # Tope holgado (10 minutos en ms) para descartar valores absurdos
+    valor: float = Field(ge=0, le=600_000)
+    calificacion: Literal["good", "needs-improvement", "poor"]
+    vista: str = Field(min_length=1, max_length=30, pattern=r"^[a-z_-]+$")
+    navegacion: (
+        Literal[
+            "navigate",
+            "reload",
+            "back-forward",
+            "back-forward-cache",
+            "prerender",
+            "restore",
+            "soft-navigation",
+        ]
+        | None
+    ) = None
+
+
+class ResumenMetricaOut(BaseModel):
+    nombre: str
+    muestras: int
+    # Percentil 75: el valor que usa Google para decir si una métrica pasa
+    p75: float
+    # Fracción de mediciones calificadas como «good» (0 a 1)
+    buenas: float

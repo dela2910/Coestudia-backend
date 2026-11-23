@@ -328,6 +328,18 @@ Todas requieren sesión.
 universidad del usuario. Si no existe y no viene `nombre`, responde 404 para que el frontend pida
 el nombre. Agregar una que ya está en la lista no es error. Máximo 10 asignaturas por usuario.
 
+## Core Web Vitals
+
+El frontend mide LCP, INP, CLS, FCP y TTFB en los navegadores reales y las guarda en la tabla
+`metrica_web` (anónimas: sin usuario ni IP).
+
+- `POST /api/metricas-web`: público. Recibe una lista de 1 a 20 métricas
+  (`[{"nombre": "LCP", "valor": 1830, "calificacion": "good", "vista": "home", "navegacion": "navigate"}]`).
+  Lee el cuerpo como texto porque `navigator.sendBeacon` lo manda como `text/plain`. Hasta 8 KB y
+  60 envíos por minuto por conexión. Responde `204`.
+- `GET /api/metricas-web/resumen?dias=7&vista=home`: con sesión. Devuelve por métrica las muestras,
+  el percentil 75 (`p75`, el que usa Google para decir si pasa) y la fracción calificada «good».
+
 ## Base de datos y migraciones
 
 El esquema vive en `app/models.py` y se aplica con migraciones de Alembic. Si cambias un modelo:
