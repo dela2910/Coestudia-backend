@@ -12,6 +12,7 @@ from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -44,13 +45,7 @@ async def record_metrics(request: Request, db: Session = Depends(get_db)):
         )
     vitals_limiter.record_failure(key)
 
-    # Primero el largo declarado, para no leer un cuerpo enorme a memoria
-    declared = request.headers.get("content-length", "0")
-    if not declared.isdigit() or int(declared) > MAX_BYTES_POR_ENVIO:
-        raise HTTPException(413, "Envío demasiado grande.")
-    body = await request.body()
-    if len(body) > MAX_BYTES_POR_ENVIO:
-        raise HTTPException(413, "Envío demasiado grande.")
+    body = await read_limited_body(request)
     try:
         metricas = _lote.validate_python(json.loads(body))
     except (ValueError, ValidationError) as error:
@@ -58,9 +53,34 @@ async def record_metrics(request: Request, db: Session = Depends(get_db)):
     if not 1 <= len(metricas) <= MAX_METRICAS_POR_ENVIO:
         raise HTTPException(422, "Métricas inválidas.")
 
+    # La sesión de la base es síncrona: dentro de un endpoint async se corre en otro hilo para no
+    # bloquear al servidor mientras responde la base
+    await run_in_threadpool(save_metrics, db, metricas)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def read_limited_body(request: Request) -> bytes:
+    """Lee el cuerpo por partes y corta apenas pasa del máximo.
+
+    El Content-Length permite rechazar de inmediato, pero un envío por partes (chunked) no lo
+    trae: por eso también se cuenta lo que va llegando, sin juntar más de lo permitido.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None and (not declared.isdigit() or int(declared) > MAX_BYTES_POR_ENVIO):
+        raise HTTPException(413, "Envío demasiado grande.")
+    chunks = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > MAX_BYTES_POR_ENVIO:
+            raise HTTPException(413, "Envío demasiado grande.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def save_metrics(db: Session, metricas: list[MetricaWebIn]) -> None:
     db.add_all(MetricaWeb(**m.model_dump()) for m in metricas)
     db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def percentile_75(values: list[float]) -> float:

@@ -54,6 +54,32 @@ def test_rejects_large_payloads(client):
     assert send(client, payload).status_code == 413
 
 
+def test_rejects_large_chunked_payloads_without_content_length(client):
+    # Un envío por partes no trae Content-Length: el límite se aplica mientras se lee
+    def chunks():
+        for _ in range(10):
+            yield b"x" * 1024
+
+    response = client.post(URL, content=chunks(), headers={"Content-Type": "text/plain"})
+    assert "content-length" not in response.request.headers
+    assert response.status_code == 413
+
+
+def test_accepts_small_chunked_payloads(client, session_factory):
+    body = json.dumps([metric()]).encode()
+    response = client.post(URL, content=iter([body[:10], body[10:]]))
+    assert response.status_code == 204
+    with session_factory() as db:
+        assert db.query(MetricaWeb).count() == 1
+
+
+def test_rejects_invalid_content_length(client):
+    response = client.post(
+        URL, content=json.dumps([metric()]), headers={"Content-Length": "9999999"}
+    )
+    assert response.status_code == 413
+
+
 def test_limits_sends_per_connection(client):
     for _ in range(60):
         assert send(client, [metric()]).status_code == 204
