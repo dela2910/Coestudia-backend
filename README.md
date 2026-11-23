@@ -328,6 +328,19 @@ Todas requieren sesión.
 universidad del usuario. Si no existe y no viene `nombre`, responde 404 para que el frontend pida
 el nombre. Agregar una que ya está en la lista no es error. Máximo 10 asignaturas por usuario.
 
+## Notificaciones
+
+La campana del menú. No tienen tabla propia: se arman con las solicitudes y las invitaciones, así
+que cualquier endpoint que las cree o responda ya genera la notificación. Solo se guarda
+`usuario.avisos_vistos_en` (cuándo abrió la campana por última vez) para saber cuáles son nuevas.
+
+- `GET /api/notificaciones`: `{"sin_leer": 2, "notificaciones": [...]}`, las más recientes primero
+  (máximo 30). Tipos: `solicitud_recibida` (piden unirse a un grupo suyo) e `invitacion_recibida`
+  (lo invitaron), que se muestran mientras sigan pendientes; `solicitud_respondida` (aceptaron o
+  rechazaron su solicitud, también el rechazo automático) e `invitacion_respondida` (respondieron
+  una invitación que mandó), de los últimos 30 días.
+- `POST /api/notificaciones/vistas`: marca todo como visto. Responde `204`.
+
 ## Base de datos y migraciones
 
 El esquema vive en `app/models.py` y se aplica con migraciones de Alembic. Si cambias un modelo:
