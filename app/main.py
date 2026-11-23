@@ -12,6 +12,8 @@ from app.routers import (
     grupos,
     hello,
     invitaciones,
+    metricas_web,
+    notificaciones,
     perfil,
     solicitudes,
     sugerencias,
@@ -44,3 +46,5 @@ app.include_router(foro.router)
 app.include_router(asistente.router)
 app.include_router(sugerencias.router)
 app.include_router(invitaciones.router)
+app.include_router(metricas_web.router)
+app.include_router(notificaciones.router)

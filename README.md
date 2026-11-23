@@ -328,6 +328,31 @@ Todas requieren sesión.
 universidad del usuario. Si no existe y no viene `nombre`, responde 404 para que el frontend pida
 el nombre. Agregar una que ya está en la lista no es error. Máximo 10 asignaturas por usuario.
 
+## Notificaciones
+
+La campana del menú. No tienen tabla propia: se arman con las solicitudes y las invitaciones, así
+que cualquier endpoint que las cree o responda ya genera la notificación. Solo se guarda
+`usuario.avisos_vistos_en` (cuándo abrió la campana por última vez) para saber cuáles son nuevas.
+
+- `GET /api/notificaciones`: `{"sin_leer": 2, "notificaciones": [...]}`, las más recientes primero
+  (máximo 30). Tipos: `solicitud_recibida` (piden unirse a un grupo suyo) e `invitacion_recibida`
+  (lo invitaron), que se muestran mientras sigan pendientes; `solicitud_respondida` (aceptaron o
+  rechazaron su solicitud, también el rechazo automático) e `invitacion_respondida` (respondieron
+  una invitación que mandó), de los últimos 30 días.
+- `POST /api/notificaciones/vistas`: marca todo como visto. Responde `204`.
+
+## Core Web Vitals
+
+El frontend mide LCP, INP, CLS, FCP y TTFB en los navegadores reales y las guarda en la tabla
+`metrica_web` (anónimas: sin usuario ni IP).
+
+- `POST /api/metricas-web`: público. Recibe una lista de 1 a 20 métricas
+  (`[{"nombre": "LCP", "valor": 1830, "calificacion": "good", "vista": "home", "navegacion": "navigate"}]`).
+  Lee el cuerpo como texto porque `navigator.sendBeacon` lo manda como `text/plain`. Hasta 8 KB y
+  60 envíos por minuto por conexión. Responde `204`.
+- `GET /api/metricas-web/resumen?dias=7&vista=home`: con sesión. Devuelve por métrica las muestras,
+  el percentil 75 (`p75`, el que usa Google para decir si pasa) y la fracción calificada «good».
+
 ## Base de datos y migraciones
 
 El esquema vive en `app/models.py` y se aplica con migraciones de Alembic. Si cambias un modelo:
