@@ -12,7 +12,7 @@ abrió las notificaciones por última vez (usuario.avisos_vistos_en), para saber
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Response, status
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -117,6 +117,18 @@ def my_notifications(user: Usuario = Depends(current_user), db: Session = Depend
 @router.post("/vistas", status_code=status.HTTP_204_NO_CONTENT)
 def mark_seen(user: Usuario = Depends(current_user), db: Session = Depends(get_db)):
     """El usuario abrió la campana: lo que ya existe deja de ser nuevo."""
-    user.avisos_vistos_en = now_utc()
+    now = now_utc()
+    # Solo avanza: si dos pestañas abren la campana a la vez y la más antigua guarda al último,
+    # la fecha no vuelve atrás (y no reaparecen como nuevas notificaciones ya vistas)
+    db.execute(
+        update(Usuario)
+        .where(
+            Usuario.id == user.id,
+            or_(Usuario.avisos_vistos_en.is_(None), Usuario.avisos_vistos_en < now),
+        )
+        .values(avisos_vistos_en=now)
+        # La comparación la hace la base; no se repite en Python sobre el usuario ya cargado
+        .execution_options(synchronize_session=False)
+    )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

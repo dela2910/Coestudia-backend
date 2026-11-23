@@ -3,6 +3,7 @@
 from datetime import timedelta
 
 from app.models import Solicitud, Usuario, now_utc
+from app.security import as_utc
 from tests.test_invitaciones import invitation_id, invite, respond
 from tests.test_solicitudes import answer, ask, create_group, pending_ids
 
@@ -132,3 +133,30 @@ def test_requests_from_deleted_accounts_are_hidden(client, users, session_factor
         db.commit()
 
     assert notifications(client, users["ana"])["notificaciones"] == []
+
+
+def test_mark_seen_never_moves_back(client, users, session_factory):
+    # Otra pestaña ya guardó una fecha más nueva: esta no la pisa con una más antigua
+    later = now_utc() + timedelta(minutes=5)
+    with session_factory() as db:
+        db.query(Usuario).filter(Usuario.email == "ana@uc.cl").one().avisos_vistos_en = later
+        db.commit()
+
+    assert client.post(f"{URL}/vistas", headers=users["ana"]).status_code == 204
+
+    with session_factory() as db:
+        saved = db.query(Usuario).filter(Usuario.email == "ana@uc.cl").one().avisos_vistos_en
+    assert as_utc(saved) == later
+
+
+def test_mark_seen_moves_forward(client, users, session_factory):
+    earlier = now_utc() - timedelta(days=1)
+    with session_factory() as db:
+        db.query(Usuario).filter(Usuario.email == "ana@uc.cl").one().avisos_vistos_en = earlier
+        db.commit()
+
+    client.post(f"{URL}/vistas", headers=users["ana"])
+
+    with session_factory() as db:
+        saved = db.query(Usuario).filter(Usuario.email == "ana@uc.cl").one().avisos_vistos_en
+    assert as_utc(saved) > earlier
