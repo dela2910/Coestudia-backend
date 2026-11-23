@@ -1,6 +1,7 @@
 """Formato de entrada y salida de la API (Pydantic)."""
 
 from datetime import date, datetime, time
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer, field_validator
 
@@ -429,3 +430,33 @@ class AsignaturaSugeridaOut(BaseModel):
     grupos_disponibles: int
     # Por qué se sugiere (ej. «Está en tus asignaturas»); None si solo calza con lo escrito
     motivo: str | None
+
+
+class NotificacionOut(BaseModel):
+    """Aviso para el usuario, armado a partir de sus solicitudes e invitaciones."""
+
+    # Único por aviso, ej. «solicitud_recibida-12» (sirve de key en React)
+    id: str
+    # solicitud_recibida: alguien pidió unirse a un grupo del usuario (pendiente)
+    # invitacion_recibida: lo invitaron a un grupo (pendiente)
+    # solicitud_respondida: aceptaron o rechazaron una solicitud que envió
+    # invitacion_respondida: aceptaron o rechazaron una invitación que mandó
+    tipo: Literal[
+        "solicitud_recibida", "invitacion_recibida", "solicitud_respondida", "invitacion_respondida"
+    ]
+    fecha: datetime
+    grupo_id: int
+    # Sigla y nombre, ej. «MAT1620 Cálculo II»
+    asignatura: str
+    # La otra persona: quien pidió unirse, quien invita o el invitado. None si es el creador
+    # quien respondió la solicitud del usuario
+    persona: str | None
+    # Solo en las respondidas
+    aceptada: bool | None = None
+    # Llegó después de la última vez que abrió las notificaciones
+    nueva: bool
+
+
+class NotificacionesOut(BaseModel):
+    sin_leer: int
+    notificaciones: list[NotificacionOut]

@@ -69,6 +69,8 @@ class Usuario(Base):
     # null = cuenta activa; se elimina de forma lógica para no romper el historial de los grupos
     eliminado_en: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
     creado_en: Mapped[datetime] = created_at()
+    # Última vez que abrió las notificaciones: las posteriores se marcan como nuevas
+    avisos_vistos_en: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
 
     asignaturas: Mapped[list["UsuarioAsignatura"]] = relationship(
         back_populates="usuario", cascade="all, delete-orphan"
