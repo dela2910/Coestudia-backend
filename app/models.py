@@ -16,6 +16,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Date,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -447,3 +448,40 @@ class FuenteMensaje(Base):
     ubicacion: Mapped[str | None] = mapped_column(Text)
 
     archivo: Mapped[Archivo] = relationship()
+
+
+# Core Web Vitals que manda el frontend (librería web-vitals)
+METRICAS_WEB = ("LCP", "INP", "CLS", "FCP", "TTFB")
+CALIFICACIONES_WEB = ("good", "needs-improvement", "poor")
+
+
+class MetricaWeb(Base):
+    """Una medición de Core Web Vitals de un navegador real.
+
+    Es anónima a propósito: no se guarda el usuario ni la IP, solo qué tan rápida se sintió la
+    app y en qué vista estaba.
+    """
+
+    __tablename__ = "metrica_web"
+    __table_args__ = (
+        CheckConstraint(
+            "nombre IN ('LCP', 'INP', 'CLS', 'FCP', 'TTFB')", name="ck_metrica_web_nombre"
+        ),
+        CheckConstraint(
+            "calificacion IN ('good', 'needs-improvement', 'poor')",
+            name="ck_metrica_web_calificacion",
+        ),
+        Index("ix_metrica_web_nombre_creada", "nombre", "creada_en"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nombre: Mapped[str] = mapped_column(String(8))
+    # Milisegundos, salvo CLS que no tiene unidad
+    valor: Mapped[float] = mapped_column(Float)
+    # La calificación que calcula web-vitals con los umbrales oficiales de Google
+    calificacion: Mapped[str] = mapped_column(String(20))
+    # Vista de la SPA cuando se reportó (ej. «home», «login»)
+    vista: Mapped[str] = mapped_column(String(30))
+    # Cómo se llegó a la página: navigate, reload, back-forward, etc.
+    navegacion: Mapped[str | None] = mapped_column(String(30))
+    creada_en: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=now_utc)

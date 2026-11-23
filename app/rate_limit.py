@@ -52,3 +52,9 @@ class LoginLimiter:
 
 
 login_limiter = LoginLimiter()
+
+
+# Envíos de métricas web por conexión: un navegador manda uno o dos por carga de página, así que
+# 60 por minuto solo frena a quien esté llenando la tabla a propósito. Reusa la ventana deslizante
+# de LoginLimiter: cada envío cuenta como un «fallo»
+vitals_limiter = LoginLimiter(max_failures=60, window=60)
